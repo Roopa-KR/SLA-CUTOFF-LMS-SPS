@@ -1,0 +1,5 @@
+body { background: #f6f7f9; }
+.kpi .fs-3 { line-height: 1.1; }
+.table td, .table th { white-space: nowrap; }
+.chart { height: 360px; }
+.badge.text-bg-light { border: 1px solid #ccc; }
