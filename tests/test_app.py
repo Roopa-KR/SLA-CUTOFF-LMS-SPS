@@ -20,3 +20,15 @@ def test_dashboard_shows_trucks_at_19_15(client):
 def test_every_snapshot_renders(client):
     for snap in range(1, 19):
         assert client.get(f"/?snapshot={snap}").status_code == 200
+
+
+def test_truck_page_explains_the_status(client):
+    html = client.get("/truck/SH0917-06?snapshot=13").get_data(as_text=True)
+    assert "Why this status" in html and "Prescription is the slowest area" in html
+    assert client.get("/truck/UNKNOWN").status_code == 404
+
+
+def test_every_truck_page_renders(client):
+    for snap in (1, 7, 13, 18):
+        for i in range(1, 11):
+            assert client.get(f"/truck/SH0917-{i:02d}?snapshot={snap}").status_code == 200

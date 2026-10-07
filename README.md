@@ -28,19 +28,20 @@ Bootstrap and Plotly.js load from their CDN, so the browser needs internet acces
 ## Project layout (only what is used now)
 
 ```text
-app.py                  Flask app: dashboard route + `init-db` command
+app.py                  Flask app: dashboard and truck routes + `init-db` command
 config.py / .env        settings
 calculations/
   excel_io.py           reads inputs and the cached Excel results (openpyxl -> pandas)
   etc.py                the ETC equation per snapshot x work type (ETC_CALC)
   truck.py              truck ETC per work type and per truck (TRUCK_WT_ETC, TRUCK_ETC)
   what_if.py            temporary operators (TRUCK_TEMP_NEED, TRUCK_TEMP_LM005S1, after-adding columns)
+  detail.py             truck drill-down: operators, work types, orders, trends, explanation, alerts
   engine.py             runs the whole calculation
 models/
   models.py             SQLAlchemy tables: snapshot, truck_result, worktype_result
   database.py           engine / session, rebuild from the calculation, queries
 templates/, static/     Jinja2 + Bootstrap 5 + Plotly.js dashboard
-tests/                  pytest: test_etc.py, test_truck.py, test_excel_parity.py, test_app.py
+tests/                  pytest: test_etc.py, test_truck.py, test_excel_parity.py, test_detail.py, test_app.py
 ```
 
 SQLite is reached only through SQLAlchemy (`DATABASE_URL`), so PostgreSQL can replace it later without touching
@@ -98,7 +99,28 @@ documented in the code:
 Known workbook artifact: when the slack after adding is exactly zero, Excel shows "-0:00" (its subtraction leaves
 a ~1e-12 negative remainder); the app shows "+0:00". The parity test treats both as equal.
 
+## Phase 4 - truck drill-down
+
+Click a truck on the dashboard (or open `/truck/SH0917-06?snapshot=13`). The page shows, for that truck at the snapshot:
+
+* KPIs: lines and pieces picked / open, orders complete, ETC and ready time, bottleneck, operators who picked it,
+  extra pickers needed, result with temporary operators.
+* **Why this status**: a sentence built from the numbers (slowest area, lines ahead from earlier trucks, pickers, rate,
+  ready time vs cutoff, pickers needed, effect of temporary operators; or, for a departed truck, when the last line was
+  picked and what was left behind).
+* Work types: open / ahead / picked, working-assigned-idle pickers, rates, ETC, ready time, meets cutoff, extra pickers,
+  temporary operators; chart of each area's finish against the pick cutoff.
+* Operators (picked for the truck, hold its work, or work an area it still needs): status (working, assigned not
+  started, idle, logged out), lines and pieces for the truck and today, pace vs area average, shorts, work held,
+  estimated finish, minutes since last pick, flags; status donut and pace chart.
+* Trends up to the snapshot: open lines and slack, lines picked per 15 min by area, pickers per area.
+* Orders on the truck with their state and notes (moved, added late, cancelled lines), and alerts with suggested actions.
+
+The drill-down logic is in `calculations/detail.py` (thresholds at the top: assigned-not-started 10 min, no pick 30 min,
+low pace below 60% of the area average after 0.5 h). It reads the source rows that `init-db` stores in SQLite
+(`src_*` tables) and the stored engine results; `tests/test_detail.py` checks that its totals match the engine.
+
 ## Next phases (not built yet)
 
-Phase 4 drill-down (truck -> work type -> operator), Phase 5 what-if planner (temporary operators, move orders,
-delay departure, ship partial), Phase 6 alerts, Phase 7 configuration and audit, Phase 8 production evolution.
+Work-type and operator pages, Phase 5 what-if planner (temporary operators, move orders, delay departure, ship
+partial), Phase 6 alerts, Phase 7 configuration and audit, Phase 8 production evolution.

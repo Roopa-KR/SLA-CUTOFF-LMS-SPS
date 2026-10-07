@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% set t = d.truck %}
+{% block title %}{{ ship }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center gap-3 mb-2">
+  <a href="{{ url_for('dashboard', snapshot=current.snapshot_no) }}" class="btn btn-sm btn-outline-secondary">&larr; All trucks</a>
+  <h4 class="mb-0">{{ ship }}</h4>
+  <span class="text-muted">Route {{ t.ROUTEID }} &middot; Door {{ t.DOCK_DOOR }} &middot; {{ t.CARRIER }}</span>
+  <span class="badge fs-6 text-bg-{{ style }}">{{ t.TRUCK_STATUS }}</span>
+  {% if t.SLACK %}<span class="fw-semibold {% if t.SLACK.startswith('-') %}text-danger{% else %}text-success{% endif %}">slack {{ t.SLACK }}</span>{% endif %}
+  <form method="get" class="ms-auto d-flex align-items-center gap-2">
+    <label for="snapshot" class="small text-muted">Snapshot</label>
+    <select id="snapshot" name="snapshot" class="form-select form-select-sm" onchange="this.form.submit()">
+      {% for s in snaps %}<option value="{{ s.snapshot_no }}" {% if s.snapshot_no == current.snapshot_no %}selected{% endif %}>{{ s.snapshot_no }} &middot; {{ s.snapshot_time | clock }}</option>{% endfor %}
+    </select>
+  </form>
+</div>
+<div class="small text-muted mb-3">
+  As at {{ current.snapshot_time | clock }} &middot; departure {{ t.DEPARTURE | sclock }} &middot; pick cutoff {{ t.PICK_CUTOFF | sclock }}
+  (departure &minus; loading time){% if t.NOTE %} &middot; <span class="text-body">{{ t.NOTE }}</span>{% endif %}
+</div>
+
+<div class="row g-2 mb-3">
+  {% set k = d.kpis %}
+  <div class="col-6 col-md-3 col-xl"><div class="card h-100"><div class="card-body py-2">
+    <div class="small text-muted">Lines picked</div><div class="fs-4 fw-semibold">{{ k.lines_picked }} / {{ k.lines_picked + k.open_lines }}</div>
+    <div class="kpi-sub text-muted">{{ k.open_lines }} open &middot; {{ ((k.lines_picked / (k.lines_picked + k.open_lines)) if (k.lines_picked + k.open_lines) else 0) | pct }} done</div></div></div></div>
+  <div class="col-6 col-md-3 col-xl"><div class="card h-100"><div class="card-body py-2">
+    <div class="small text-muted">Pieces picked</div><div class="fs-4 fw-semibold">{{ k.pieces_picked | num }}</div>
+    <div class="kpi-sub text-muted">{{ k.open_pieces | num }} open &middot; {{ k.shorts }} short lines</div></div></div></div>
+  <div class="col-6 col-md-3 col-xl"><div class="card h-100"><div class="card-body py-2">
+    <div class="small text-muted">Orders complete</div><div class="fs-4 fw-semibold">{{ k.orders_done }} / {{ k.orders_total }}</div>
+    <div class="kpi-sub text-muted">orders on this truck</div></div></div></div>
+  <div class="col-6 col-md-3 col-xl"><div class="card h-100 border-{{ style }}"><div class="card-body py-2">
+    <div class="small text-muted">ETC &rarr; ready</div>
+    <div class="fs-4 fw-semibold">{% if t.OPEN_LINES and t.ETC_HOURS is not none %}{{ t.ETC_HOURS | hhmm }} &rarr; {{ t.READY_TIME | sclock }}{% elif t.OPEN_LINES %}NULL{% else %}&ndash;{% endif %}</div>
+    <div class="kpi-sub text-muted">bottleneck {{ t.BOTTLENECK or "none" }}</div></div></div></div>
+  <div class="col-6 col-md-3 col-xl"><div class="card h-100"><div class="card-body py-2">
+    <div class="small text-muted">Operators</div><div class="fs-4 fw-semibold">{{ k.operators_worked }}</div>
+    <div class="kpi-sub text-muted">picked for this truck &middot; {{ d.operators | selectattr('status', 'equalto', 'Working') | list | length }} working now</div></div></div></div>
+  <div class="col-6 col-md-3 col-xl"><div class="card h-100"><div class="card-body py-2">
+    <div class="small text-muted">Extra pickers needed</div><div class="fs-4 fw-semibold">{{ t.OPERATOR_GAP or "0" }}</div>
+    <div class="kpi-sub text-muted">on the bottleneck area</div></div></div></div>
+  <div class="col-6 col-md-3 col-xl"><div class="card h-100"><div class="card-body py-2">
+    <div class="small text-muted">With temporary operators</div>
+    <div class="fs-6 fw-semibold mt-1"><span class="badge text-bg-{{ t.TRUCK_STATUS_AFTER | status_style }}">{{ t.TRUCK_STATUS_AFTER }}</span> {{ t.SLACK_AFTER }}</div>
+    <div class="kpi-sub text-muted">{% if t.TEMPS_ADDED %}{{ t.TEMPS_ADDED }}{% if t.TIME_SAVED_MIN %} &middot; saves {{ (t.TIME_SAVED_MIN / 60) | hhmm }}{% endif %}{% else %}none added{% endif %}</div></div></div></div>
+</div>
+
+<div class="alert alert-{{ 'secondary' if style in ('light', 'secondary') else style }} why mb-3"><strong>Why this status:</strong> {{ d.why }}</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-xl-7"><div class="card h-100">
+    <div class="card-header fw-semibold">Work types</div>
+    <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+      <thead class="table-light"><tr><th>Area</th><th class="text-end">Open</th><th class="text-end" title="Open lines of trucks leaving earlier, picked first">Ahead</th>
+        <th class="text-end">Picked</th><th class="text-end">Done</th><th class="text-center" title="Working / assigned not started / idle">W/A/I</th>
+        <th class="text-end">Team rate</th><th class="text-end">Per picker</th><th class="text-end">ETC</th><th>Ready</th><th>Meets cutoff</th>
+        <th class="text-end">+Pickers</th><th>With temps</th></tr></thead>
+      <tbody>
+      {% for w in d.worktypes %}
+        <tr class="{% if w.meets == 'NO' %}table-danger{% elif w.meets.startswith('UNKNOWN') %}table-warning{% endif %}">
+          <td class="fw-semibold">{{ w.worktype }} {{ w.name }}</td><td class="text-end">{{ w.open_lines }}</td><td class="text-end">{{ w.ahead_other or "" }}</td>
+          <td class="text-end">{{ w.picked }}</td><td class="text-end">{{ w.pct | pct }}</td><td class="text-center">{{ w.working }}/{{ w.assigned }}/{{ w.idle }}</td>
+          <td class="text-end">{{ w.rate | num }}</td><td class="text-end">{{ w.per_person | num(1) }}</td>
+          <td class="text-end">{% if w.etc is number %}{{ w.etc | dur }}{% elif w.open_lines %}NULL{% endif %}</td>
+          <td>{{ w.ready | sclock if w.ready is number else "" }}</td><td>{{ w.meets }}</td>
+          <td class="text-end">{{ w.additional }}</td>
+          <td>{% if w.temps and w.ready_after is number %}+{{ w.temps }} &rarr; {{ w.ready_after | sclock }} ({{ w.meets_after }}){% endif %}</td>
+        </tr>
+      {% else %}<tr><td colspan="13" class="text-muted">No work released for this truck yet.</td></tr>{% endfor %}
+      </tbody></table></div>
+    <div class="card-footer small text-muted">ETC = lines ahead &divide; team rate. "Ahead" = lines of trucks with an earlier pick cutoff that are picked first.</div>
+  </div></div>
+  <div class="col-xl-5"><div class="card h-100">
+    <div class="card-header fw-semibold">When each area finishes vs the pick cutoff</div>
+    <div class="card-body"><div id="wt-chart" class="chart-sm"></div></div>
+  </div></div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-xl-8"><div class="card h-100">
+    <div class="card-header fw-semibold">Operators <span class="fw-normal text-muted small">&middot; picked for this truck, hold its work, or work an area it still needs</span></div>
+    <div class="table-responsive table-scroll"><table class="table table-sm align-middle mb-0">
+      <thead class="table-light sticky-top"><tr><th>Operator</th><th>Area</th><th>Status</th><th>Login</th><th class="text-end">Lines (truck)</th>
+        <th class="text-end">Pieces (truck)</th><th class="text-end">Lines today</th><th class="text-end">Pace l/h</th><th class="text-end">vs area</th>
+        <th class="text-end">Shorts</th><th class="text-end">Holding</th><th>Est. finish</th><th class="text-end">Min since pick</th><th>Flags</th></tr></thead>
+      <tbody>
+      {% for o in d.operators %}
+        <tr>
+          <td class="fw-semibold">{{ o.name }}</td><td>{{ o.worktype }} {{ wt_names.get(o.worktype, '') }}</td>
+          <td><span class="badge text-bg-{{ {'Working':'success','Assigned, not started':'warning','Idle':'secondary','Logged out':'light'}[o.status] }}">{{ o.status }}</span></td>
+          <td>{{ o.login | sclock if o.login is number else "" }}</td><td class="text-end">{{ o.lines_truck }}</td><td class="text-end">{{ o.pieces_truck | num }}</td>
+          <td class="text-end">{{ o.lines_today }}</td><td class="text-end">{{ o.pace | num(1) }}</td>
+          <td class="text-end {% if o.pct_of_avg is number and o.pct_of_avg < 0.6 %}text-danger fw-semibold{% endif %}">{{ o.pct_of_avg | pct }}</td>
+          <td class="text-end">{{ o.shorts or "" }}</td><td class="text-end">{{ o.held or "" }}</td><td>{{ o.finish | sclock if o.finish is number else "" }}</td>
+          <td class="text-end">{{ o.since_pick | num if o.since_pick is number else "" }}</td>
+          <td>{% for f in o.flags %}<span class="badge text-bg-warning flag me-1">{{ f }}</span>{% endfor %}</td>
+        </tr>
+      {% else %}<tr><td colspan="14" class="text-muted">No operators linked to this truck yet.</td></tr>{% endfor %}
+      </tbody></table></div>
+  </div></div>
+  <div class="col-xl-4"><div class="card h-100">
+    <div class="card-header fw-semibold">Operator status and pace</div>
+    <div class="card-body"><div id="status-chart" style="height:220px"></div><div id="pace-chart" style="height:300px"></div></div>
+  </div></div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-xl-4"><div class="card h-100"><div class="card-header fw-semibold">Open lines and slack over the day</div>
+    <div class="card-body"><div id="burn-chart" class="chart-sm"></div></div></div></div>
+  <div class="col-xl-4"><div class="card h-100"><div class="card-header fw-semibold">Lines picked per 15 min (this truck)</div>
+    <div class="card-body"><div id="through-chart" class="chart-sm"></div></div></div></div>
+  <div class="col-xl-4"><div class="card h-100"><div class="card-header fw-semibold">Pickers logged in per area</div>
+    <div class="card-body"><div id="pickers-chart" class="chart-sm"></div></div></div></div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-xl-7"><div class="card h-100">
+    <div class="card-header fw-semibold">Orders on this truck ({{ d.orders | length }})</div>
+    <div class="table-responsive table-scroll"><table class="table table-sm align-middle mb-0">
+      <thead class="table-light sticky-top"><tr><th>Order</th><th>Stop</th><th>Released</th><th>Areas</th><th class="text-end">Done / lines</th>
+        <th class="text-end">Open</th><th>State</th><th>Notes</th></tr></thead>
+      <tbody>
+      {% for o in d.orders %}
+        <tr><td>{{ o.order }}</td><td>{{ o.stop }}</td><td>{{ o.release | sclock }}</td><td>{{ o.worktypes }}</td>
+          <td class="text-end">{{ o.done }} / {{ o.lines }}</td><td class="text-end">{{ o.open or "" }}</td>
+          <td><span class="badge text-bg-{{ {'Complete':'success','In progress':'primary','Not started':'secondary','Not released':'light'}[o.state] }}">{{ o.state }}</span></td>
+          <td class="small">{{ o.flags | join('; ') }}</td></tr>
+      {% endfor %}
+      </tbody></table></div>
+  </div></div>
+  <div class="col-xl-5"><div class="card h-100">
+    <div class="card-header fw-semibold">Alerts and suggested actions</div>
+    <ul class="list-group list-group-flush">
+      {% for level, text, action in d.alerts %}
+        <li class="list-group-item"><span class="badge text-bg-{{ level }} me-2">{{ {'danger':'Critical','warning':'Check','info':'Info'}[level] }}</span>{{ text }}
+          <div class="small text-muted mt-1">&rarr; {{ action }}</div></li>
+      {% else %}<li class="list-group-item text-muted">Nothing needs attention for this truck.</li>{% endfor %}
+    </ul>
+  </div></div>
+</div>
+<script id="detail-data" type="application/json">{{ chart | tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="{{ url_for('static', filename='js/truck_detail.js') }}"></script>
+{% endblock %}

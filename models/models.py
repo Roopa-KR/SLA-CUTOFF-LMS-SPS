@@ -64,6 +64,8 @@ class WorktypeResult(Base):
     lines_ahead: Mapped[int] = mapped_column(Integer)
     resources: Mapped[int] = mapped_column(Integer)
     rate: Mapped[float | None] = mapped_column(Float)
+    per_person_rate: Mapped[float | None] = mapped_column(Float)
+    operators_needed: Mapped[str | None] = mapped_column(String(40))
     wt_etc_hours: Mapped[float | None] = mapped_column(Float)
     ready_time: Mapped[dt.datetime | None] = mapped_column(DateTime)
     meets: Mapped[str | None] = mapped_column(String(30))

@@ -3,3 +3,9 @@ body { background: #f6f7f9; }
 .table td, .table th { white-space: nowrap; }
 .chart { height: 360px; }
 .badge.text-bg-light { border: 1px solid #ccc; }
+tr.clickable { cursor: pointer; }
+.why { font-size: 1.02rem; }
+.kpi-sub { font-size: .8rem; }
+.chart-sm { height: 300px; }
+.flag { font-size: .75rem; }
+.table-scroll { max-height: 420px; overflow-y: auto; }

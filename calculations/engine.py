@@ -20,6 +20,7 @@ class Results:
     temp_grid: pd.DataFrame    # per snapshot x temporary operator (TRUCK_TEMP_LM005S1)
     snapshots: pd.DataFrame
     worktype_names: dict
+    inputs: object = None      # the workbook inputs (used to store the drill-down source rows)
 
 
 def run(workbook_path: str) -> Results:
@@ -31,4 +32,4 @@ def run(workbook_path: str) -> Results:
     grid = allocate_temps(need, temps)
     wt, need = apply_temps(wt, need, grid, inp.config["TEMP_PACE_PCT"])
     trucks = truck_rows(inp, wt, after=True)
-    return Results(etc, wt, trucks, need, grid, inp.snapshots, inp.worktype_names)
+    return Results(etc, wt, trucks, need, grid, inp.snapshots, inp.worktype_names, inp)

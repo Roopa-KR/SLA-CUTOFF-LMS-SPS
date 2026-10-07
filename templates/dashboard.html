@@ -27,7 +27,7 @@
 </div>
 
 <div class="card mb-3">
-  <div class="card-header fw-semibold">Trucks</div>
+  <div class="card-header fw-semibold">Trucks <span class="fw-normal text-muted small">&middot; click a truck for details</span></div>
   <div class="table-responsive">
     <table class="table table-sm table-hover align-middle mb-0">
       <thead class="table-light"><tr>
@@ -37,8 +37,9 @@
       </tr></thead>
       <tbody>
       {% for t in trucks %}
-        <tr>
-          <td class="fw-semibold">{{ t.shipment_id }}</td><td>{{ t.dock_door }}</td>
+        <tr class="clickable" onclick="location.href='{{ url_for('truck', shipment_id=t.shipment_id, snapshot=current.snapshot_no) }}'"
+            title="Open the truck details">
+          <td class="fw-semibold"><a href="{{ url_for('truck', shipment_id=t.shipment_id, snapshot=current.snapshot_no) }}" class="link-dark">{{ t.shipment_id }}</a></td><td>{{ t.dock_door }}</td>
           <td><span class="badge text-bg-{{ t.status | status_style }}">{{ t.status }}</span></td>
           <td class="text-end">{% if t.open_lines %}{{ t.etc_hours | hhmm }}{% endif %}</td>
           <td>{{ t.ready_time | clock }}</td><td>{{ t.pick_cutoff | clock }}</td><td>{{ t.departure | clock }}</td>

@@ -64,7 +64,8 @@ def load_inputs(path: str) -> Inputs:
     lm = _table(wb["LM005S1"], 2)
     ti = _table(wb["TI102"], 2)
     tc = _table(wb["TI102C"], 2)
-    for df, cols in [(lm, ["SNAPSHOT_TIME", "TRANSACTIONDATE"]), (ti, ["SNAPSHOT_TIME", "TRANSACTIONDATE"]),
+    for df, cols in [(lm, ["SNAPSHOT_TIME", "TRANSACTIONDATE", "STARTDATETIME", "ENDDATETIME"]),
+                     (ti, ["SNAPSHOT_TIME", "TRANSACTIONDATE", "CHANGEDATETIME"]),
                      (tc, ["TRANSACTIONDATE", "MOVED_TO_C_AT"])]:
         for c in cols:
             df[c] = df[c].map(to_serial)
