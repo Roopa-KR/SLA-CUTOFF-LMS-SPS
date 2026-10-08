@@ -39,8 +39,9 @@ def ge(a: float, b: float) -> bool:
 
 
 def hhmm(days) -> str:
-    """Excel TEXT(days, "[h]:mm"): whole minutes, seconds cut off."""
-    minutes = int(math.floor(days * 1440 + 1e-6))
+    """Excel TEXT(days, "[h]:mm"): rounded to the nearest second, then whole minutes."""
+    seconds = int(math.floor(days * 86400 + 0.5))
+    minutes = seconds // 60
     return f"{minutes // 60}:{minutes % 60:02d}"
 
 

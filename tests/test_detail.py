@@ -1,9 +1,11 @@
-"""The truck drill-down must agree with the engine (same lines, same truck membership) and explain each status."""
+"""The truck drill-down must agree with the engine (same items, same truck membership) and explain each status.
+Cases are real trucks of 08-Sep-2026."""
 import pytest
 
 from calculations.detail import truck_detail
 
-CASES = [(13, "SH0917-06"), (13, "SH0917-01"), (4, "SH0917-02"), (16, "SH0917-05"), (13, "SH0917-10"), (18, "SH0917-10")]
+CASES = [(9, "SH0908-1001"), (1, "SH0908-1888"), (13, "SH0908-1001"), (12, "SH0908-1027"), (1, "SH0908-1001"),
+         (7, "SH0908-1018"), (9, "SH0908-1075"), (9, "SH0908-1981")]
 
 
 def detail(results, snap, ship):
@@ -21,23 +23,30 @@ def test_kpis_reconcile_with_engine(results, snap, ship):
     assert sum(sum(v) for v in d["trends"]["throughput"].values()) == t["LINES_PICKED"]
     assert sum(o["lines_truck"] for o in d["operators"]) == t["LINES_PICKED"]
     assert sum(w["open_lines"] for w in d["worktypes"]) == t["OPEN_LINES"]
+    assert sum(w["items"] for w in d["workids"]) == sum(o["lines"] for o in d["orders"])
 
 
 def test_why_explains_each_kind_of_status(results):
-    assert "slowest area" in detail(results, 13, "SH0917-06")[0]["why"]
-    assert detail(results, 13, "SH0917-01")[0]["why"].startswith("Left complete at 18:00")
-    assert "nobody is working it" in detail(results, 4, "SH0917-02")[0]["why"]
-    assert "13 lines not picked" in detail(results, 16, "SH0917-05")[0]["why"]
-    assert detail(results, 13, "SH0917-10")[0]["why"].startswith("No work released yet")
+    assert "Cooler is the slowest area" in detail(results, 9, "SH0908-1001")[0]["why"]
+    assert "nobody is working it" in detail(results, 1, "SH0908-1888")[0]["why"]
+    assert "110 lines not picked" in detail(results, 13, "SH0908-1001")[0]["why"]
+    assert detail(results, 12, "SH0908-1027")[0]["why"].startswith("Left complete at 18:30")
+    assert detail(results, 1, "SH0908-1001")[0]["why"].startswith("No work released yet")
+    assert "not released yet" in detail(results, 7, "SH0908-1018")[0]["why"]
+    assert "pick cutoff (18:15) has passed" in detail(results, 9, "SH0908-1075")[0]["why"]
+
+
+def test_one_truck_has_many_work_ids_and_orders(results):
+    d, _ = detail(results, 9, "SH0908-1001")
+    assert d["kpis"]["workids_total"] == 83 and d["kpis"]["orders_total"] == 9
 
 
 def test_alerts_point_to_the_bottleneck(results):
-    d, _ = detail(results, 13, "SH0917-06")
+    d, _ = detail(results, 9, "SH0908-1001")
     texts = [a[1] for a in d["alerts"]]
-    assert any("Prescription finishes at 19:59" in x for x in texts)
-    assert any("HERMERT" in x and "Idle while work is waiting" in x for x in texts)
+    assert any("Cooler finishes at 19:41" in x for x in texts)
 
 
-def test_departed_truck_raises_no_operator_alerts(results):
-    d, _ = detail(results, 13, "SH0917-01")
+def test_departed_complete_truck_raises_no_alerts(results):
+    d, _ = detail(results, 12, "SH0908-1027")
     assert d["alerts"] == []

@@ -30,7 +30,7 @@ def rebuild_all() -> None:
     """Workbook -> calculation engine -> SQLite (results + the source rows the drill-down needs)."""
     results = run(config.WORKBOOK_PATH)
     db.rebuild(results)
-    db.store_sources(results.inputs)
+    db.store_sources(results.inputs, db.workbook_stamp(config.WORKBOOK_PATH))
 
 
 def create_app() -> Flask:
@@ -41,7 +41,7 @@ def create_app() -> Flask:
                                  pct=lambda v: f"{v:.0%}" if isinstance(v, (int, float)) else "",
                                  num=lambda v, d=0: f"{v:,.{d}f}" if isinstance(v, (int, float)) else "")
     db.init_db()
-    if db.is_empty():
+    if db.needs_rebuild(config.WORKBOOK_PATH):
         rebuild_all()
 
     @app.cli.command("init-db")

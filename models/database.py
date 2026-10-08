@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import os
 from contextlib import contextmanager
 from functools import lru_cache
 from types import SimpleNamespace
@@ -42,11 +43,18 @@ def init_db() -> None:
     Base.metadata.create_all(engine)
 
 
-def is_empty() -> bool:
-    if not inspect(engine).has_table("src_ti102"):
+def needs_rebuild(workbook_path: str) -> bool:
+    """True when the database is empty, from an older version, or built from a different workbook."""
+    if not inspect(engine).has_table("src_config") or not inspect(engine).has_table("src_line_map"):
+        return True
+    if "ASSIGNMENTID" not in {c["name"] for c in inspect(engine).get_columns("src_line_map")}:
         return True
     with session_scope() as s:
-        return s.scalar(select(func.count()).select_from(TruckResult)) == 0
+        if s.scalar(select(func.count()).select_from(TruckResult)) == 0:
+            return True
+    cfg = pd.read_sql_table("src_config", engine)
+    stored = dict(zip(cfg.key, cfg.value)).get("WORKBOOK_STAMP")
+    return stored != workbook_stamp(workbook_path)
 
 
 # ---------- value conversion (engine uses Excel serial days, "" and None for blanks) ----------
@@ -124,17 +132,24 @@ SOURCES = {
     "src_ti102c": ("tc", ["TI102ID", "WORKTYPE", "RESOURCENAME", "PROCESSEDQTY", "SHORTQTY", "MOVED_TO_C_AT", "SRCLOC",
                           "TRANSACTIONDATE"]),
     "src_order": ("orders", ["WHORDERID", "SHIPMENTID", "ORIGINAL_SHIPMENTID", "MOVED_AT", "STOPID", "RELEASE_TIME",
-                             "OB_SCENARIO_ID"]),
-    "src_line_map": ("line_map", ["TI102ID", "WHORDERID", "WORKTYPE"]),
+                             "OB_SCENARIO_ID", "CUSTOMER", "CUSTOMER_NAME"]),
+    "src_line_map": ("line_map", ["TI102ID", "WHORDERID", "WORKTYPE", "ASSIGNMENTID", "CUSTOMER"]),
 }
 
 
-def store_sources(inputs) -> None:
+def workbook_stamp(path: str) -> str:
+    """Size + modification time of the workbook: a different workbook means the database must be rebuilt."""
+    st = os.stat(path)
+    return f"{st.st_size}-{int(st.st_mtime)}"
+
+
+def store_sources(inputs, stamp: str = "") -> None:
     """Keep the source rows the drill-down needs (times as Excel serial days)."""
     for table, (attr, cols) in SOURCES.items():
-        getattr(inputs, attr)[cols].to_sql(table, engine, if_exists="replace", index=False)
-    pd.DataFrame([("ANALYSIS_DATE", inputs.config["ANALYSIS_DATE"])], columns=["key", "value"]).to_sql(
-        "src_config", engine, if_exists="replace", index=False)
+        frame = getattr(inputs, attr)
+        frame[[c for c in cols if c in frame.columns]].to_sql(table, engine, if_exists="replace", index=False)
+    pd.DataFrame([("ANALYSIS_DATE", inputs.config["ANALYSIS_DATE"]), ("WORKBOOK_STAMP", stamp)],
+                 columns=["key", "value"]).to_sql("src_config", engine, if_exists="replace", index=False)
     inputs.snapshots.to_sql("src_snapshot", engine, if_exists="replace", index=False)
     pd.DataFrame(list(inputs.worktype_names.items()), columns=["WORKTYPE", "NAME"]).to_sql(
         "src_worktype", engine, if_exists="replace", index=False)
@@ -145,7 +160,7 @@ def store_sources(inputs) -> None:
 def load_sources() -> SimpleNamespace:
     frames = {attr: pd.read_sql_table(table, engine) for table, (attr, _) in SOURCES.items()}
     cfg = pd.read_sql_table("src_config", engine)
-    frames["config"] = dict(zip(cfg.key, cfg.value))
+    frames["config"] = {k: (float(v) if k == "ANALYSIS_DATE" else v) for k, v in zip(cfg.key, cfg.value)}
     frames["snapshots"] = pd.read_sql_table("src_snapshot", engine)
     names = pd.read_sql_table("src_worktype", engine)
     frames["worktype_names"] = dict(zip(names.WORKTYPE.astype(int), names.NAME))

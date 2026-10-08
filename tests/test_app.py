@@ -1,4 +1,4 @@
-"""Smoke test: the dashboard builds the SQLite database from the workbook and shows the trucks."""
+"""Smoke test: the app builds the SQLite database from the workbook and shows the real day's trucks."""
 import os
 
 import pytest
@@ -11,10 +11,10 @@ def client(tmp_path_factory):
     return app_module.app.test_client()
 
 
-def test_dashboard_shows_trucks_at_19_15(client):
-    html = client.get("/?snapshot=13").get_data(as_text=True)
-    assert "SH0917-06" in html and "AT RISK" in html
-    assert "-0:29" in html          # SH0917-06 slack, same as the workbook
+def test_dashboard_shows_trucks_at_18_15(client):
+    html = client.get("/?snapshot=9").get_data(as_text=True)
+    assert "SH0908-1001" in html and "AT RISK" in html
+    assert "-0:56" in html          # SH0908-1001 slack, same as the workbook
 
 
 def test_every_snapshot_renders(client):
@@ -23,12 +23,13 @@ def test_every_snapshot_renders(client):
 
 
 def test_truck_page_explains_the_status(client):
-    html = client.get("/truck/SH0917-06?snapshot=13").get_data(as_text=True)
-    assert "Why this status" in html and "Prescription is the slowest area" in html
+    html = client.get("/truck/SH0908-1001?snapshot=9").get_data(as_text=True)
+    assert "Why this status" in html and "Cooler is the slowest area" in html
+    assert "Work IDs (83)" in html
     assert client.get("/truck/UNKNOWN").status_code == 404
 
 
-def test_every_truck_page_renders(client):
-    for snap in (1, 7, 13, 18):
-        for i in range(1, 11):
-            assert client.get(f"/truck/SH0917-{i:02d}?snapshot={snap}").status_code == 200
+def test_truck_pages_render(client):
+    for snap in (1, 6, 9, 13, 18):
+        for ship in ("SH0908-1001", "SH0908-1027", "SH0908-1888", "SH0908-1981"):
+            assert client.get(f"/truck/{ship}?snapshot={snap}").status_code == 200

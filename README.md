@@ -3,8 +3,17 @@
 Will each truck's work be picked before its pick cutoff? This app recalculates the Truck ETC of the Excel
 workbook in Python, stores the results in SQLite and shows them in a Flask dashboard.
 
-The Excel workbook (`data/workbook.xlsx` = SMD_Truck_ETC_2026-09-17.xlsx) is the **golden reference**:
+The Excel workbook (`data/workbook.xlsx` = SMD_Truck_ETC_RealDay_2026-09-08.xlsx) is the **golden reference**:
 the Python engine reproduces every value of its truck sheets (see "Parity").
+
+**Data: the real SMD day 08-Sep-2026** (extract SMD-235, warehouse 100): 1,432 items, 731 work IDs, 447 customer
+orders, 36 routes = 36 trucks, 13 pickers with their real login sessions and pick times. Only the truck departures
+(last order release + 60 min, rounded up to 15 min = pick cutoff, + 30 min loading), dock doors and the 10
+temporary operators are synthesized. Speeds are therefore real items per picker-hour.
+
+SMD structure used: route = truck; a customer order is split into one work ID per region (work ID = order number +
+2 digits); a region-6 case-pick work ID can hold items of several customers, and every item keeps its own order and
+truck, so all truck calculations count items, not work IDs. Waves are not in the extract.
 
 ## Run it in VS Code
 
@@ -15,7 +24,8 @@ pip install -r requirements.txt
 python app.py                   # first start builds data/truck_etc.db from the workbook (~5 s)
 ```
 
-Open http://127.0.0.1:5000 and pick a snapshot (16:15 ... 20:30).
+Open http://127.0.0.1:5000 and pick a snapshot (16:15 ... 20:30; default 18:15).
+The database is rebuilt automatically whenever `data/workbook.xlsx` changes.
 
 | Task | Command |
 | --- | --- |
@@ -94,7 +104,12 @@ Times are kept as Excel serial numbers (days) so comparisons match Excel. Two ti
 documented in the code:
 * time comparisons allow 1e-9 day, because Python's conversion of a time can differ from Excel's stored number in
   the 12th digit (otherwise a ready time exactly on the cutoff can flip from YES to NO);
-* ROUNDUP ignores a 1e-9 excess (40 lines / (10 lines/h x 1 h) = 4 people, not 5).
+* ROUNDUP ignores a 1e-9 excess (40 lines / (10 lines/h x 1 h) = 4 people, not 5);
+* TEXT(x, "[h]:mm") is reproduced as Excel does it: rounded to the nearest second, then whole minutes.
+
+NO RATE on the real day: pickers log into an area only when they pick there, so an area can have open items and
+nobody logged in (Cage, Cooler and Vault before about 17:30; Cooler between batches). The ETC equation then cannot
+estimate the area, and the app shows NO RATE exactly as the workbook does (180 of 648 truck-snapshot rows).
 
 Known workbook artifact: when the slack after adding is exactly zero, Excel shows "-0:00" (its subtraction leaves
 a ~1e-12 negative remainder); the app shows "+0:00". The parity test treats both as equal.
@@ -114,7 +129,8 @@ Click a truck on the dashboard (or open `/truck/SH0917-06?snapshot=13`). The pag
   started, idle, logged out), lines and pieces for the truck and today, pace vs area average, shorts, work held,
   estimated finish, minutes since last pick, flags; status donut and pace chart.
 * Trends up to the snapshot: open lines and slack, lines picked per 15 min by area, pickers per area.
-* Orders on the truck with their state and notes (moved, added late, cancelled lines), and alerts with suggested actions.
+* Orders on the truck (customer, regions, work IDs, state) and the truck's work IDs (region, customers, items done /
+  open, state, pickers; work IDs holding several customers are marked), and alerts with suggested actions.
 
 The drill-down logic is in `calculations/detail.py` (thresholds at the top: assigned-not-started 10 min, no pick 30 min,
 low pace below 60% of the area average after 0.5 h). It reads the source rows that `init-db` stores in SQLite

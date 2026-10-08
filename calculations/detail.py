@@ -22,9 +22,14 @@ def _effective_truck(df: pd.DataFrame, t: float) -> pd.Series:
 
 
 def line_orders(src) -> pd.DataFrame:
-    return src.line_map[["TI102ID", "WHORDERID"]].merge(
-        src.orders[["WHORDERID", "SHIPMENTID", "ORIGINAL_SHIPMENTID", "MOVED_AT", "STOPID", "RELEASE_TIME", "OB_SCENARIO_ID"]],
-        on="WHORDERID", how="left")
+    """Item -> work ID -> customer order -> truck (one work ID can hold items of several orders)."""
+    lm = src.line_map
+    extra = [c for c in ("ASSIGNMENTID", "WORKTYPE", "CUSTOMER") if c in lm.columns]
+    ocols = [c for c in ("WHORDERID", "SHIPMENTID", "ORIGINAL_SHIPMENTID", "MOVED_AT", "STOPID", "RELEASE_TIME",
+                         "OB_SCENARIO_ID", "CUSTOMER_NAME") if c in src.orders.columns]
+    out = lm[["TI102ID", "WHORDERID"] + extra].merge(src.orders[ocols], on="WHORDERID", how="left")
+    out["WHORDERID"] = out.WHORDERID.astype(str)
+    return out
 
 
 def clock(serial) -> str:
@@ -32,6 +37,10 @@ def clock(serial) -> str:
         return ""
     m = int(round((serial % 1) * 1440))
     return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def plural(n, word) -> str:
+    return f"{n} {word}" + ("" if n == 1 else "s")
 
 
 def dur(days) -> str:
@@ -63,15 +72,17 @@ def truck_detail(src, snaps: pd.DataFrame, snapshot_no: int, ship: str, truck_hi
     operators = _operators(src, t, snapshot_no, picked, open_mine, ti_now, lm_now, tc, open_wts, wt_rows)
     worktypes = _worktypes(wt_rows, picked, operators, wt_names)
     orders = _orders(mine, picked, open_mine, src, t, wt_names)
+    workids = _workids(mine, picked, open_mine, ti_now, src, t)
     trends = _trends(src, snaps, snapshot_no, ship, truck_hist, lines, tc, t)
     kpis = dict(lines_picked=int(len(picked)), pieces_picked=float(picked.PROCESSEDQTY.sum()),
                 open_lines=int(len(open_mine)), open_pieces=float(open_mine.OPENQTY.sum()),
                 orders_total=len(orders), orders_done=sum(o["state"] == "Complete" for o in orders),
+                workids_total=len(workids), workids_done=sum(w["state"] == "Complete" for w in workids),
                 operators_worked=int(picked.RESOURCENAME.nunique()),
                 shorts=int((picked.SHORTQTY > 0).sum()))
     alerts = _alerts(truck, worktypes, operators, picked, wt_names, open_wts)
     return _plain(dict(t=t, truck=truck, kpis=kpis, why=_why(truck, wt_rows, picked, open_mine, orders, wt_names, t),
-                worktypes=worktypes, operators=operators, orders=orders, trends=trends, alerts=alerts))
+                worktypes=worktypes, operators=operators, orders=orders, workids=workids, trends=trends, alerts=alerts))
 
 
 def _plain(x):
@@ -169,8 +180,9 @@ def _worktypes(wt_rows, picked, operators, wt_names):
 # ------------------------------------------------------------------ orders
 def _orders(mine, picked, open_mine, src, t, wt_names):
     out = []
-    done = picked.groupby(picked.TI102ID.map(dict(zip(mine.TI102ID, mine.WHORDERID)))).size()
-    opn = open_mine.groupby(open_mine.TI102ID.map(dict(zip(mine.TI102ID, mine.WHORDERID)))).size()
+    to_order = dict(zip(mine.TI102ID, mine.WHORDERID))
+    done = picked.groupby(picked.TI102ID.map(to_order)).size()
+    opn = open_mine.groupby(open_mine.TI102ID.map(to_order)).size()
     wts = src.line_map.groupby("WHORDERID").WORKTYPE.agg(lambda s: ", ".join(str(w) for w in sorted(s.unique())))
     for oid, g in mine.groupby("WHORDERID"):
         o = g.iloc[0]
@@ -190,10 +202,48 @@ def _orders(mine, picked, open_mine, src, t, wt_names):
             flags.append("Added late")
         if isinstance(o.OB_SCENARIO_ID, str) and "T06" in o.OB_SCENARIO_ID:
             flags.append("Has cut / cancelled lines")
-        out.append(dict(order=int(oid), stop=o.STOPID, release=o.RELEASE_TIME, worktypes=wts.get(oid, ""),
+        name = o.CUSTOMER_NAME if "CUSTOMER_NAME" in g and isinstance(o.CUSTOMER_NAME, str) else ""
+        out.append(dict(order=str(oid), customer=name, stop=o.STOPID, release=o.RELEASE_TIME, worktypes=wts.get(oid, ""),
+                        workids=int(g.ASSIGNMENTID.nunique()) if "ASSIGNMENTID" in g else None,
                         lines=total, done=n_done, open=n_open, state=state, flags=flags))
     rank = {"In progress": 0, "Not started": 1, "Not released": 2, "Complete": 3}
     return sorted(out, key=lambda o: (rank[o["state"]], o["release"], o["order"]))
+
+
+def _workids(mine, picked, open_mine, ti_now, src, t):
+    """Work IDs (assignments) carrying this truck's items: region, customers, progress, picker."""
+    if "ASSIGNMENTID" not in mine:
+        return []
+    names = {}
+    if "CUSTOMER_NAME" in mine:
+        names = dict(zip(mine.WHORDERID, mine.CUSTOMER_NAME))
+    picked_ids, open_ids = set(picked.TI102ID), set(open_mine.TI102ID)
+    holder = open_mine.dropna(subset=["RESOURCENAME"]).set_index("TI102ID").RESOURCENAME.to_dict()
+    pick_by = picked.set_index("TI102ID").RESOURCENAME.to_dict()
+    out = []
+    for wid, g in mine.groupby("ASSIGNMENTID"):
+        ids = list(g.TI102ID)
+        n_done = sum(i in picked_ids for i in ids)
+        n_open = sum(i in open_ids for i in ids)
+        released = n_done + n_open
+        started = any(i in holder for i in ids)
+        if released == 0:
+            state = "Not released"
+        elif n_open == 0:
+            state = "Complete"
+        elif started or n_done:
+            state = "In progress"
+        else:
+            state = "Waiting"
+        people = sorted({holder[i] for i in ids if i in holder} | {pick_by[i] for i in ids if i in pick_by})
+        orders = sorted(g.WHORDERID.unique())
+        custs = sorted({names.get(o) for o in orders if isinstance(names.get(o), str)})
+        out.append(dict(workid=int(wid), worktype=int(g.WORKTYPE.iloc[0]), orders=len(orders),
+                        customers=", ".join(custs[:3]) + (f" +{len(custs) - 3}" if len(custs) > 3 else ""),
+                        several=len(orders) > 1, items=len(ids), done=n_done, open=n_open, state=state,
+                        pickers=", ".join(people)))
+    rank = {"In progress": 0, "Waiting": 1, "Not released": 2, "Complete": 3}
+    return sorted(out, key=lambda w: (rank[w["state"]], w["worktype"], w["workid"]))
 
 
 # ------------------------------------------------------------------ trends over the snapshots
@@ -229,7 +279,7 @@ def _why(truck, wt_rows, picked, open_mine, orders, wt_names, t):
             when = (f"{dur(cut - last)} before the pick cutoff ({clock(cut)})" if last <= cut
                     else f"{dur(last - cut)} after the pick cutoff, inside the loading buffer")
             return (f"Left complete at {clock(dep)}. Last line picked at {clock(last)}, {when}. "
-                    f"{len(picked)} lines picked by {picked.RESOURCENAME.nunique()} operators.")
+                    f"{plural(len(picked), 'line')} picked by {plural(picked.RESOURCENAME.nunique(), 'operator')}.")
         return f"Left at {clock(dep)}."
     if st.startswith("DEPARTED - "):
         by = open_mine.groupby("WORKTYPE").size()
@@ -239,11 +289,16 @@ def _why(truck, wt_rows, picked, open_mine, orders, wt_names, t):
         first = min((o["release"] for o in orders), default=None)
         return f"No work released yet for this truck." + (f" Its first orders are released at {clock(first)}." if first else "")
     if st == "ALL PICKED":
-        return f"All {truck['LINES_RELEASED']} released lines are picked; the truck waits for departure at {clock(dep)}."
+        text = f"All {truck['LINES_RELEASED']} released lines are picked; the truck waits for departure at {clock(dep)}."
+        later = [o for o in orders if o["state"] == "Not released"]
+        if later:
+            text += (f" {plural(len(later), 'more order')} for this truck {'is' if len(later) == 1 else 'are'} not released yet "
+                     f"(next at {clock(min(o['release'] for o in later))}).")
+        return text
     late = [r for r in wt_rows if r["OPEN_LINES"] > 0]
     if st == "NO RATE":
         nr = [r for r in late if r["WT_ETC"] is None]
-        return " ".join(f"{name(r['WORKTYPE'])} has {r['OPEN_LINES']} open lines for this truck but nobody is working it, "
+        return " ".join(f"{name(r['WORKTYPE'])} has {plural(r['OPEN_LINES'], 'open line')} for this truck but nobody is working it, "
                         f"so its speed and the truck's ETC cannot be estimated." for r in nr) + \
             " Someone needs to start picking there."
     b = int(truck["BOTTLENECK"][3:4]) if truck["BOTTLENECK"] else None
@@ -253,7 +308,7 @@ def _why(truck, wt_rows, picked, open_mine, orders, wt_names, t):
     ahead = br["LINES_AHEAD"] - br["OPEN_LINES"]
     text = (f"{name(b)} is the slowest area: {br['LINES_AHEAD']} lines to pick before this truck is ready "
             f"({br['OPEN_LINES']} of its own" + (f" + {ahead} for trucks leaving earlier" if ahead else "") + "). "
-            f"{br['RESOURCES']} pickers at {br['ACTUALRATELINES']:.0f} lines/h need {dur(br['WT_ETC'])}, so it is ready at "
+            f"{plural(br['RESOURCES'], 'picker')} at {br['ACTUALRATELINES']:.0f} lines/h {'needs' if br['RESOURCES'] == 1 else 'need'} {dur(br['WT_ETC'])}, so it is ready at "
             f"{clock(br['WT_READY_TIME'])}")
     if st == "PICK CUTOFF PASSED - LATE":
         return (f"The pick cutoff ({clock(cut)}) has passed with {truck['OPEN_LINES']} lines still open. " + text +

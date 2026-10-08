@@ -16,4 +16,4 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///data/truck_etc.db")
 if DATABASE_URL.startswith("sqlite:///") and not os.path.isabs(DATABASE_URL[len("sqlite:///"):]):
     # a relative SQLite path is taken from the project folder, wherever the app is started from
     DATABASE_URL = "sqlite:///" + _path(DATABASE_URL[len("sqlite:///"):]).replace("\\", "/")
-DEFAULT_SNAPSHOT = int(os.getenv("DEFAULT_SNAPSHOT", "13"))
+DEFAULT_SNAPSHOT = int(os.getenv("DEFAULT_SNAPSHOT", "9"))

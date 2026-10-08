@@ -30,7 +30,7 @@
     <div class="kpi-sub text-muted">{{ k.open_pieces | num }} open &middot; {{ k.shorts }} short lines</div></div></div></div>
   <div class="col-6 col-md-3 col-xl"><div class="card h-100"><div class="card-body py-2">
     <div class="small text-muted">Orders complete</div><div class="fs-4 fw-semibold">{{ k.orders_done }} / {{ k.orders_total }}</div>
-    <div class="kpi-sub text-muted">orders on this truck</div></div></div></div>
+    <div class="kpi-sub text-muted">work IDs {{ k.workids_done }} / {{ k.workids_total }} complete</div></div></div></div>
   <div class="col-6 col-md-3 col-xl"><div class="card h-100 border-{{ style }}"><div class="card-body py-2">
     <div class="small text-muted">ETC &rarr; ready</div>
     <div class="fs-4 fw-semibold">{% if t.OPEN_LINES and t.ETC_HOURS is not none %}{{ t.ETC_HOURS | hhmm }} &rarr; {{ t.READY_TIME | sclock }}{% elif t.OPEN_LINES %}NULL{% else %}&ndash;{% endif %}</div>
@@ -117,18 +117,42 @@
 
 <div class="row g-3 mb-4">
   <div class="col-xl-7"><div class="card h-100">
-    <div class="card-header fw-semibold">Orders on this truck ({{ d.orders | length }})</div>
-    <div class="table-responsive table-scroll"><table class="table table-sm align-middle mb-0">
-      <thead class="table-light sticky-top"><tr><th>Order</th><th>Stop</th><th>Released</th><th>Areas</th><th class="text-end">Done / lines</th>
-        <th class="text-end">Open</th><th>State</th><th>Notes</th></tr></thead>
-      <tbody>
-      {% for o in d.orders %}
-        <tr><td>{{ o.order }}</td><td>{{ o.stop }}</td><td>{{ o.release | sclock }}</td><td>{{ o.worktypes }}</td>
-          <td class="text-end">{{ o.done }} / {{ o.lines }}</td><td class="text-end">{{ o.open or "" }}</td>
-          <td><span class="badge text-bg-{{ {'Complete':'success','In progress':'primary','Not started':'secondary','Not released':'light'}[o.state] }}">{{ o.state }}</span></td>
-          <td class="small">{{ o.flags | join('; ') }}</td></tr>
-      {% endfor %}
-      </tbody></table></div>
+    <div class="card-header p-0 border-bottom-0">
+      <ul class="nav nav-tabs" role="tablist">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-orders" type="button">Orders ({{ d.orders | length }})</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-workids" type="button">Work IDs ({{ d.workids | length }})</button></li>
+      </ul>
+    </div>
+    <div class="tab-content">
+      <div class="tab-pane fade show active" id="tab-orders">
+        <div class="table-responsive table-scroll"><table class="table table-sm align-middle mb-0">
+          <thead class="table-light sticky-top"><tr><th>Order</th><th>Customer</th><th>Stop</th><th>Released</th><th>Regions</th>
+            <th class="text-end">Work IDs</th><th class="text-end">Done / items</th><th class="text-end">Open</th><th>State</th><th>Notes</th></tr></thead>
+          <tbody>
+          {% for o in d.orders %}
+            <tr><td>{{ o.order }}</td><td class="small">{{ o.customer }}</td><td>{{ o.stop }}</td><td>{{ o.release | sclock }}</td><td>{{ o.worktypes }}</td>
+              <td class="text-end">{{ o.workids if o.workids is not none else "" }}</td><td class="text-end">{{ o.done }} / {{ o.lines }}</td><td class="text-end">{{ o.open or "" }}</td>
+              <td><span class="badge text-bg-{{ {'Complete':'success','In progress':'primary','Not started':'secondary','Not released':'light'}[o.state] }}">{{ o.state }}</span></td>
+              <td class="small">{{ o.flags | join('; ') }}</td></tr>
+          {% endfor %}
+          </tbody></table></div>
+      </div>
+      <div class="tab-pane fade" id="tab-workids">
+        <div class="table-responsive table-scroll"><table class="table table-sm align-middle mb-0">
+          <thead class="table-light sticky-top"><tr><th>Work ID</th><th>Region</th><th>Customer(s)</th><th class="text-end">Orders</th>
+            <th class="text-end">Done / items</th><th class="text-end">Open</th><th>State</th><th>Picker(s)</th></tr></thead>
+          <tbody>
+          {% for w in d.workids %}
+            <tr><td>{{ w.workid }}{% if w.several %} <span class="badge text-bg-info flag">several customers</span>{% endif %}</td>
+              <td>{{ w.worktype }} {{ wt_names.get(w.worktype, '') }}</td><td class="small">{{ w.customers }}</td><td class="text-end">{{ w.orders }}</td>
+              <td class="text-end">{{ w.done }} / {{ w.items }}</td><td class="text-end">{{ w.open or "" }}</td>
+              <td><span class="badge text-bg-{{ {'Complete':'success','In progress':'primary','Waiting':'warning','Not released':'light'}[w.state] }}">{{ w.state }}</span></td>
+              <td class="small">{{ w.pickers }}</td></tr>
+          {% endfor %}
+          </tbody></table></div>
+        <div class="small text-muted p-2">Waiting = released, nobody has started it yet. A region-6 case-pick work ID can hold items of several customers; each item still belongs to its own order and truck.</div>
+      </div>
+    </div>
   </div></div>
   <div class="col-xl-5"><div class="card h-100">
     <div class="card-header fw-semibold">Alerts and suggested actions</div>

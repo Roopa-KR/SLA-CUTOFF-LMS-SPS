@@ -73,12 +73,19 @@ def load_inputs(path: str) -> Inputs:
     shipments = _table(wb["OB_SHIPMENT"], 5).iloc[:, :15]
     for c in ["ORIGINAL_DEPARTURE", "DEPARTURE_TIME", "DEPARTURE_CHANGED_AT"]:
         shipments[c] = shipments[c].map(to_serial)
-    orders = _table(wb["OB_ORDER"], 5).iloc[:, :12]
+    raw_orders = _table(wb["OB_ORDER"], 5)
+    orders = raw_orders.iloc[:, :12].copy()
     orders.columns = ["WHORDERID", "SHIPMENTID", "ORIGINAL_SHIPMENTID", "MOVED_AT", "ROUTEID", "STOPID",
                       "RELEASE_TIME", "ASSIGNMENTS", "LINES", "WORK_TYPES", "DATA_TYPE", "OB_SCENARIO_ID"]
+    orders["WHORDERID"] = orders.WHORDERID.astype(str)
+    # real-day workbook: customer of each order (optional columns)
+    orders["CUSTOMER"] = raw_orders["CUSTOMER (OWNER)"] if "CUSTOMER (OWNER)" in raw_orders else None
+    orders["CUSTOMER_NAME"] = raw_orders["CUSTOMER_NAME"] if "CUSTOMER_NAME" in raw_orders else None
     for c in ["MOVED_AT", "RELEASE_TIME"]:
         orders[c] = orders[c].map(to_serial)
     line_map = _table(wb["OB_LINE_MAP"], 5)
+    line_map["WHORDERID"] = line_map.WHORDERID.astype(str)
+    line_map["CUSTOMER"] = line_map["CUSTOMER (OWNER)"] if "CUSTOMER (OWNER)" in line_map else None
 
     tws = wb["TEMP_OPERATORS"]
     temps = pd.DataFrame([[tws.cell(r, c).value for c in range(1, 8)] for r in range(6, 16)],
