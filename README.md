@@ -1,4 +1,4 @@
-# Truck ETC supervisor app (SMD) - first local version
+# Truck ETC LMS (SMD) - first local version
 
 Will each truck's work be picked before its pick cutoff? This app recalculates the Truck ETC of the Excel
 workbook in Python, stores the results in SQLite and shows them in a Flask dashboard.
