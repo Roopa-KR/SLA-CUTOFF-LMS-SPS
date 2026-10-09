@@ -7,8 +7,9 @@ import pandas as pd
 
 from .etc import etc_by_worktype
 from .excel_io import load_inputs
+from .reallocation import apply_reallocation
 from .truck import truck_rows, worktype_rows
-from .what_if import allocate_temps, apply_temps, temp_need
+from .uncertainty import add_uncertainty
 
 
 @dataclass
@@ -16,8 +17,8 @@ class Results:
     etc: pd.DataFrame          # per snapshot x work type (ETC_CALC)
     worktypes: pd.DataFrame    # per snapshot x truck x work type (TRUCK_WT_ETC)
     trucks: pd.DataFrame       # per snapshot x truck (TRUCK_ETC)
-    temp_need: pd.DataFrame    # per snapshot x work type (TRUCK_TEMP_NEED)
-    temp_grid: pd.DataFrame    # per snapshot x temporary operator (TRUCK_TEMP_LM005S1)
+    reallocation: pd.DataFrame # one summary per at-risk snapshot x destination work type
+    moves: pd.DataFrame        # one row per accepted existing-operator move
     snapshots: pd.DataFrame
     worktype_names: dict
     inputs: object = None      # the workbook inputs (used to store the drill-down source rows)
@@ -27,9 +28,7 @@ def run(workbook_path: str) -> Results:
     inp = load_inputs(workbook_path)
     etc = etc_by_worktype(inp)
     wt = worktype_rows(inp, etc)
-    need = temp_need(wt)
-    temps = inp.temps.rename(columns={w: f"_{w}" for w in range(1, 7)})
-    grid = allocate_temps(need, temps)
-    wt, need = apply_temps(wt, need, grid, inp.config["TEMP_PACE_PCT"])
+    wt = add_uncertainty(inp, wt)
+    wt, reallocation, moves = apply_reallocation(inp, wt, inp.worktype_names)
     trucks = truck_rows(inp, wt, after=True)
-    return Results(etc, wt, trucks, need, grid, inp.snapshots, inp.worktype_names, inp)
+    return Results(etc, wt, trucks, reallocation, moves, inp.snapshots, inp.worktype_names, inp)

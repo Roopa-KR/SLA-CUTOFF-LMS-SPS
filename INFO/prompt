@@ -1,0 +1,66 @@
+Before this, please briefly explain your understanding of what we are currently working on versus how the process actually works in a warehouse. Also, based on your understanding, what do you think our overall goal is?(in short)
+
+Ran 4 commands
+The truck didn't really leave without its items. Two things in my model combine to show it that way: the departure time I synthesized is wrong for this route, and the status logic has a bug.
+
+What really happened on 08-Sep (route 1075)
+
+2 OTC items were released at 17:13.
+Nobody picked them until 18:53 and 18:54. Both OTC pickers were logged in but idle (W/A/I 0/0/2 on your screenshot).
+My synthesized departure for this route is 18:45: last release 17:13 + 60 min, rounded up to 18:15 (pick cutoff), + 30 min loading. So in the model the "truck" leaves before SMD actually picked its items. In reality the truck must have left later.
+What the workbook then shows
+
+Snapshot	Status	Correct?
+17:30–18:00	ON TIME (2 items, ready 18:02)	Formula is right, but optimistic: it assumes the 2 idle OTC pickers start now
+18:15–18:30	PICK CUTOFF PASSED – LATE	Yes
+18:45	DEPARTED – 2 LINES LEFT BEHIND	Yes, given the 18:45 departure
+19:00 onwards	DEPARTED COMPLETE	No – this is the bug
+The bug: after departure, the status is recalculated at each snapshot from what is still open now. The items were picked at 18:53, so from 19:00 nothing is open and the truck shows "complete", even though those items missed it. I mentioned this limitation earlier; on the real day it now produces a wrong answer.
+
+How widespread
+Of 36 trucks, 3 were really picked after their synthesized departure:
+
+Truck	Synthesized departure	Real last pick	Late by
+SH0908-1001	19:15	21:10	115 min
+SH0908-1085	21:00	22:25	85 min
+SH0908-1075	18:45	18:54	9 min
+Only 1075 flips to DEPARTED COMPLETE inside the 16:15–20:30 window; the other two still show lines left behind.
+
+Proposed fixes
+
+Freeze the status at departure (needed in any case). Once a truck has departed, count the items not picked by the departure time, and keep that for every later snapshot: "DEPARTED – 2 LINES LEFT BEHIND (picked later)". In TRUCK_ETC this is a count of OB_DONE_LINK items with pick time ≤ departure.
+Make the synthesized departures consistent with reality. Pick one:
+a. Departure = the later of the current rule and the route's real last pick + 30 min loading. No truck then leaves before SMD actually picked its items; 1075 would depart about 19:30.
+b. Keep the current rule and treat these 3 trucks as real "missed truck" cases (items that would need a later truck), labelled clearly in OB_SHIPMENT.
+Which option for point 2? I'll then apply both fixes to the workbook and update the document. I won't touch the website until you say so.
+
+Make the entire data set consistent and realistic. Thoroughly review all existing and synthesized data and cross-check every value, relationship, calculation, formula, and dependency to ensure that everything makes logical sense.
+Then perform a complete validation of the web application:
+
+Cross-check all data used in the web app against the source/synthesized data.
+Verify that all relationships between Truck ID, Shipment ID, work types, operators, picking data, staging, truck arrival time, departure time, and cutoff times are logically consistent.
+Validate all ETC, cutoff, workload, productivity, and time calculations.
+Check that all formulas produce the expected results.
+Verify that data shown on dashboards, tables, cards, charts, and drill-downs matches the underlying data.
+Check all filters, selections, navigation, and interactions.
+Identify and fix incorrect, missing, duplicated, inconsistent, or contradictory data.
+Check for edge cases and calculation errors.
+Check for UI/UX bugs, broken functionality, incorrect labels, formatting issues, and misleading information.
+Make sure changes in one part of the application correctly reflect everywhere else they should.
+Verify that no existing functionality has been unintentionally broken.
+Do not simply identify the bugs—fix them.
+After completing the validation and fixes, perform a final end-to-end cross-check of the entire application and provide the final, working, consistent web app.
+The final web app should have:
+
+Consistent and logically correct data.
+Correct calculations.
+Correct ETC and cutoff analysis.
+Correct operator/labor-level insights.
+Correct truck/shipment-level analysis.
+No contradictory or impossible scenarios.
+No broken functionality or major UI/UX issues.
+All dashboards and drill-downs showing accurate data.
+Do not make assumptions just to make the data work. If something is genuinely missing or ambiguous, identify it clearly and resolve it using the existing data/model logic wherever possible.
+
+Updating the tracking app to match the rebuilt workbook's data.
+I'll rebuild the dataset so it's consistent, fix the departed-truck logic, cross-check every sheet against the real SMD extract, then move the web app onto the corrected real-day data and validate it end to end.

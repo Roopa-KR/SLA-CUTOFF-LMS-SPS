@@ -1,4 +1,4 @@
-"""Truck ETC (sheets TRUCK_WT_ETC and TRUCK_ETC), before adding temporary operators.
+"""Truck ETC (sheets TRUCK_WT_ETC and TRUCK_ETC), before operator reallocation.
 
 For every snapshot T, truck s and work type w:
     PICK_CUTOFF(T)   = departure known at T - LOADING_MINUTES
@@ -59,7 +59,8 @@ def _effective_truck(order_rows: pd.DataFrame, t) -> pd.Series:
 
 def _line_orders(inp) -> pd.DataFrame:
     return inp.line_map[["TI102ID", "WHORDERID"]].merge(
-        inp.orders[["WHORDERID", "SHIPMENTID", "ORIGINAL_SHIPMENTID", "MOVED_AT"]], on="WHORDERID", how="left")
+        inp.orders[["WHORDERID", "SHIPMENTID", "ORIGINAL_SHIPMENTID", "MOVED_AT", "RELEASE_TIME"]],
+        on="WHORDERID", how="left")
 
 
 def worktype_rows(inp, etc: pd.DataFrame) -> pd.DataFrame:
@@ -120,12 +121,25 @@ def _last_match(rows: pd.DataFrame, mask) -> int | None:
 
 
 def truck_rows(inp, wt: pd.DataFrame, after: bool = False) -> pd.DataFrame:
-    """One row per snapshot x truck (TRUCK_ETC). With after=True also the columns after adding temporary operators."""
+    """One row per snapshot x truck. With after=True, also calculate existing-operator reallocation."""
     load_days = inp.config["LOADING_MINUTES"] / 1440
     lines = _line_orders(inp)
     day = inp.config["ANALYSIS_DATE"]
     tc = inp.tc[inp.tc.TRANSACTIONDATE == day].merge(lines, on="TI102ID", how="inner")
     tc_moved = tc.MOVED_AT.fillna(FAR_FUTURE)
+    picked_at = tc.groupby("TI102ID").MOVED_TO_C_AT.max()
+    lifecycle = lines.copy()
+    lifecycle["PICKED_AT"] = lifecycle.TI102ID.map(picked_at)
+    missed_cache = {}
+
+    def missed_counts(departure):
+        """Missed-line counts for every effective truck at one departure time."""
+        if departure not in missed_cache:
+            effective = _effective_truck(lifecycle, departure)
+            missed = ((lifecycle.RELEASE_TIME <= departure + EPS)
+                      & (lifecycle.PICKED_AT.isna() | (lifecycle.PICKED_AT > departure + EPS)))
+            missed_cache[departure] = effective[missed].value_counts()
+        return missed_cache[departure]
     out = []
     for snap in inp.snapshots.itertuples():
         t = snap.T
@@ -134,6 +148,7 @@ def truck_rows(inp, wt: pd.DataFrame, after: bool = False) -> pd.DataFrame:
         for s in inp.shipments.itertuples():
             rows = wt[(wt.SNAPSHOT_NO == snap.SNAPSHOT_NO) & (wt.SHIPMENTID == s.SHIPMENTID)]
             dep = departure_at(s, t); cut = dep - load_days
+            missed_at_departure = int(missed_counts(dep).get(s.SHIPMENTID, 0))
             picked = int(picked_by_truck.get(s.SHIPMENTID, 0)); open_ = int(rows.OPEN_LINES.sum()); released = picked + open_
             etc_vals = rows.WT_ETC
             r = dict(SNAPSHOT_NO=snap.SNAPSHOT_NO, T=t, SHIPMENTID=s.SHIPMENTID, ROUTEID=s.ROUTEID, CARRIER=s.CARRIER,
@@ -142,14 +157,16 @@ def truck_rows(inp, wt: pd.DataFrame, after: bool = False) -> pd.DataFrame:
                      PCT_PICKED=picked / released if released else "",
                      WORK_TYPES_WITH_OPEN_LINES=", ".join(str(w) for w, n in zip(rows.WORKTYPE, rows.OPEN_LINES) if n > 0),
                      OB_SCENARIO_ID=s.OB_SCENARIO_ID, NOTE=s.NOTE)
-            r.update(_truck_answer(rows, etc_vals, t, dep, cut, open_, released, after=False))
+            r.update(_truck_answer(rows, etc_vals, t, dep, cut, open_, released, after=False,
+                                   missed_at_departure=missed_at_departure))
+            r.update(_truck_uncertainty(rows, r, t, cut, open_))
             if after:
-                r.update(_after_adding(rows, r, t, cut, open_))
+                r.update(_after_reallocation(rows, r, t, cut, open_))
             out.append(r)
     return pd.DataFrame(out)
 
 
-def _truck_answer(rows, etc_vals, t, dep, cut, open_, released, after):
+def _truck_answer(rows, etc_vals, t, dep, cut, open_, released, after, missed_at_departure=None):
     if open_ == 0:
         etc_days, bottleneck, ready = 0.0, "", ""
     elif any(v is None for v in etc_vals):
@@ -162,7 +179,8 @@ def _truck_answer(rows, etc_vals, t, dep, cut, open_, released, after):
         bottleneck = f"WT {_last_match(rows, etc_vals.map(lambda v: isinstance(v, float) and v == etc_days))}"
         ready = t + etc_days
     if ge(t, dep):
-        status = "DEPARTED COMPLETE" if open_ == 0 else f"DEPARTED - {open_} LINES LEFT BEHIND"
+        missed = open_ if missed_at_departure is None else missed_at_departure
+        status = "DEPARTED COMPLETE" if missed == 0 else f"DEPARTED - {missed} LINES LEFT BEHIND"
     elif released == 0:
         status = "NO WORK RELEASED YET"
     elif open_ == 0:
@@ -188,8 +206,36 @@ def _truck_answer(rows, etc_vals, t, dep, cut, open_, released, after):
     return res
 
 
-def _after_adding(rows, before: dict, t, cut, open_):
-    """TRUCK_ETC columns AA-AH: the same truck after adding temporary operators (exact workbook rules)."""
+def _truck_uncertainty(rows, before: dict, t, cut, open_):
+    """Aggregate work-type empirical bounds to a truck-level planning range."""
+    if open_ == 0:
+        low = high = early = late = ""
+    else:
+        lows = [v for v in rows.WT_ETC_LOW if isinstance(v, float)]
+        highs = [v for v in rows.WT_ETC_HIGH if isinstance(v, float)]
+        if len(lows) != len(rows[rows.OPEN_LINES > 0]) or len(highs) != len(rows[rows.OPEN_LINES > 0]):
+            low = high = early = late = None
+        else:
+            low, high = max(lows), max(highs)
+            early, late = t + low, t + high
+    base = before["TRUCK_STATUS"]
+    if base in ("ON TIME", "AT RISK"):
+        planning = "AT RISK" if not isinstance(late, float) or not le(late, cut) else "ON TIME"
+    else:
+        planning = base
+    gap = ""
+    if planning == "AT RISK" and isinstance(high, float):
+        bottleneck = rows.loc[rows.WT_ETC_HIGH.map(lambda value: isinstance(value, float) and value == high)]
+        if len(bottleneck):
+            gap = bottleneck.ADDITIONAL_OPERATORS_CONSERVATIVE.iloc[-1]
+    planning_slack = (("-" if cut - late < -EPS else "+") + hhmm(abs(cut - late))) if isinstance(late, float) else ""
+    return dict(TRUCK_ETC_LOW=low, TRUCK_ETC_HIGH=high, READY_TIME_EARLY=early, READY_TIME_LATE=late,
+                PLANNING_STATUS=planning, UNCERTAINTY_CHANGES_RISK=(base == "ON TIME" and planning == "AT RISK"),
+                PLANNING_OPERATOR_GAP=gap, PLANNING_SLACK=planning_slack)
+
+
+def _after_reallocation(rows, before: dict, t, cut, open_):
+    """The same truck after moving only qualified existing operators between work types."""
     vals = rows.WT_ETC_AFTER
     if open_ == 0:
         etc_a, ready_a, bott_a = "", "", ""
@@ -209,7 +255,24 @@ def _after_adding(rows, before: dict, t, cut, open_):
     active = isinstance(ready_a, float) and status_b in ("ON TIME", "AT RISK")
     slack_a = (("-" if cut - ready_a < -EPS else "+") + hhmm(abs(cut - ready_a))) if active else ""
     saved = before["READY_TIME"] - ready_a if active and isinstance(before["READY_TIME"], float) else ""
-    parts = [f"WT{int(w)}:{int(n)}" for w, o, n in zip(rows.WORKTYPE, rows.OPEN_LINES, rows.TEMPS_ADDED) if o > 0 and n > 0]
+    parts = []
+    for row in rows.itertuples():
+        if row.OPEN_LINES <= 0:
+            continue
+        if row.REALLOCATED_IN:
+            parts.append(f"WT{int(row.WORKTYPE)}:+{row.REALLOCATED_IN}")
+        if row.REALLOCATED_OUT:
+            parts.append(f"WT{int(row.WORKTYPE)}:-{row.REALLOCATED_OUT}")
+    high_vals = [v for v in rows.WT_ETC_AFTER_HIGH if isinstance(v, float)] if "WT_ETC_AFTER_HIGH" in rows else []
+    etc_high_a = max(high_vals) if high_vals else (None if open_ else "")
+    ready_late_a = t + etc_high_a if isinstance(etc_high_a, float) else etc_high_a
+    planning_after = ("AT RISK" if status_b in ("ON TIME", "AT RISK")
+                      and (not isinstance(ready_late_a, float) or not le(ready_late_a, cut))
+                      else status_a)
+    planning_slack_after = (("-" if cut - ready_late_a < -EPS else "+") + hhmm(abs(cut - ready_late_a))
+                            if isinstance(ready_late_a, float) else "")
     return dict(TRUCK_ETC_AFTER=etc_a, READY_TIME_AFTER=ready_a, BOTTLENECK_AFTER=bott_a, TRUCK_STATUS_AFTER=status_a,
                 MEETS_DEPARTURE_AFTER=meets_a, SLACK_AFTER=slack_a, TIME_SAVED=saved,
-                TEMPS_ADDED_ON_ITS_WORK_TYPES=", ".join(parts))
+                TRUCK_ETC_AFTER_HIGH=etc_high_a, READY_TIME_AFTER_LATE=ready_late_a,
+                PLANNING_STATUS_AFTER=planning_after, PLANNING_SLACK_AFTER=planning_slack_after,
+                REALLOCATIONS_ON_ITS_WORK_TYPES=", ".join(parts))

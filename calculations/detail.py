@@ -51,7 +51,7 @@ def dur(days) -> str:
 
 
 def truck_detail(src, snaps: pd.DataFrame, snapshot_no: int, ship: str, truck_hist: list[dict], wt_rows: list[dict],
-                 wt_names: dict) -> dict:
+                 wt_names: dict, move_rows: list[dict] | None = None) -> dict:
     """snaps: SNAPSHOT_NO, T. truck_hist: engine truck rows of this truck for all snapshots (serial times).
     wt_rows: engine work-type rows of this truck at the snapshot."""
     t = float(snaps.loc[snaps.SNAPSHOT_NO == snapshot_no, "T"].iloc[0])
@@ -63,6 +63,7 @@ def truck_detail(src, snaps: pd.DataFrame, snapshot_no: int, ship: str, truck_hi
     day = src.config["ANALYSIS_DATE"]
 
     tc = src.tc[(src.tc.TRANSACTIONDATE == day)]
+    missed_at_departure = _missed_at_departure(lines, tc, ship, truck["DEPARTURE"])
     picked = tc[tc.TI102ID.isin(my_ids) & (tc.MOVED_TO_C_AT <= t + EPS)]
     ti_now = src.ti[src.ti.SNAPSHOT_NO == snapshot_no]
     open_mine = ti_now[ti_now.TI102ID.isin(my_ids) & (ti_now.OPENQTY > 0)]
@@ -71,6 +72,7 @@ def truck_detail(src, snaps: pd.DataFrame, snapshot_no: int, ship: str, truck_hi
 
     operators = _operators(src, t, snapshot_no, picked, open_mine, ti_now, lm_now, tc, open_wts, wt_rows)
     worktypes = _worktypes(wt_rows, picked, operators, wt_names)
+    reallocations = _reallocations(wt_rows, wt_names, truck["PICK_CUTOFF"], move_rows or [])
     orders = _orders(mine, picked, open_mine, src, t, wt_names)
     workids = _workids(mine, picked, open_mine, ti_now, src, t)
     trends = _trends(src, snaps, snapshot_no, ship, truck_hist, lines, tc, t)
@@ -80,9 +82,21 @@ def truck_detail(src, snaps: pd.DataFrame, snapshot_no: int, ship: str, truck_hi
                 workids_total=len(workids), workids_done=sum(w["state"] == "Complete" for w in workids),
                 operators_worked=int(picked.RESOURCENAME.nunique()),
                 shorts=int((picked.SHORTQTY > 0).sum()))
-    alerts = _alerts(truck, worktypes, operators, picked, wt_names, open_wts)
-    return _plain(dict(t=t, truck=truck, kpis=kpis, why=_why(truck, wt_rows, picked, open_mine, orders, wt_names, t),
-                worktypes=worktypes, operators=operators, orders=orders, workids=workids, trends=trends, alerts=alerts))
+    alerts = _alerts(truck, worktypes, operators, picked, wt_names, open_wts, missed_at_departure)
+    return _plain(dict(t=t, truck=truck, kpis=kpis,
+                why=_why(truck, wt_rows, picked, open_mine, orders, wt_names, t, missed_at_departure),
+                worktypes=worktypes, reallocations=reallocations, operators=operators,
+                orders=orders, workids=workids, trends=trends, alerts=alerts))
+
+
+def _missed_at_departure(lines, tc, ship, departure):
+    """Lines released for this truck but not picked by its effective departure."""
+    at_departure = lines.copy()
+    at_departure["TRUCK"] = _effective_truck(at_departure, departure)
+    eligible = at_departure[(at_departure.TRUCK == ship) & (at_departure.RELEASE_TIME <= departure + EPS)].copy()
+    picked_at = tc.groupby("TI102ID").MOVED_TO_C_AT.max()
+    eligible["PICKED_AT"] = eligible.TI102ID.map(picked_at)
+    return eligible[eligible.PICKED_AT.isna() | (eligible.PICKED_AT > departure + EPS)]
 
 
 def _plain(x):
@@ -171,9 +185,59 @@ def _worktypes(wt_rows, picked, operators, wt_names):
                         assigned=sum(o["status"] == "Assigned, not started" for o in ops),
                         idle=sum(o["status"] == "Idle" for o in ops), resources=r["RESOURCES"],
                         rate=r["ACTUALRATELINES"], per_person=r["PER_PERSON_RATE"], etc=r["WT_ETC"],
-                        ready=r["WT_READY_TIME"], meets=r["WT_MEETS"], additional=r["ADDITIONAL_OPERATORS"],
-                        temps=r["TEMPS_ADDED"], temp_names=r["TEMP_OPERATORS_ADDED"], ready_after=r["WT_READY_TIME_AFTER"],
-                        meets_after=r["WT_MEETS_AFTER"]))
+                        ready=r["WT_READY_TIME"], meets=r["WT_MEETS"], status=r["WT_STATUS"],
+                        rate_low=r.get("RATE_LOW"), rate_high=r.get("RATE_HIGH"),
+                        etc_low=r.get("WT_ETC_LOW"), etc_high=r.get("WT_ETC_HIGH"),
+                        ready_early=r.get("WT_READY_EARLY"), ready_late=r.get("WT_READY_LATE"),
+                        planning_meets=r.get("WT_PLANNING_MEETS", r["WT_MEETS"]),
+                        planning_status=r.get("WT_PLANNING_STATUS", r["WT_STATUS"]),
+                        uncertainty_evidence=r.get("UNCERTAINTY_EVIDENCE", ""),
+                        additional=r["ADDITIONAL_OPERATORS"], resources_after=r["RESOURCES_AFTER_REALLOCATION"],
+                        additional_conservative=r.get("ADDITIONAL_OPERATORS_CONSERVATIVE", r["ADDITIONAL_OPERATORS"]),
+                        rate_after=r["RATE_AFTER_REALLOCATION"], reallocated_in=r["REALLOCATED_IN"],
+                        reallocated_out=r["REALLOCATED_OUT"], ready_after=r["WT_READY_TIME_AFTER"],
+                        meets_after=r["WT_MEETS_AFTER"], status_after=r["WT_STATUS_AFTER"],
+                        etc_after_low=r.get("WT_ETC_AFTER_LOW"), etc_after_high=r.get("WT_ETC_AFTER_HIGH"),
+                        ready_after_late=r.get("WT_READY_AFTER_LATE"),
+                        planning_status_after=r.get("WT_PLANNING_STATUS_AFTER", r["WT_STATUS_AFTER"]),
+                        no_eligible=r["NO_ELIGIBLE_OPERATOR"]))
+    return out
+
+
+def _reallocations(wt_rows, wt_names, cutoff, move_rows):
+    """Separate decision table; the existing Details tables are left unchanged."""
+    out = []
+    for r in wt_rows:
+        if r.get("WT_PLANNING_STATUS", r["WT_STATUS"]) != "AT RISK" and not r["REALLOCATED_IN"]:
+            continue
+        before, after = r["WT_ETC"], r["WT_ETC_AFTER"]
+        familiarity = r["FAMILIARITY_EVIDENCE"] or ""
+        eligible_candidates = r.get("ELIGIBLE_CANDIDATES", "") or ""
+        candidate_parts = eligible_candidates.split("); ") if eligible_candidates else []
+        candidate_parts = [part if part.endswith(")") else part + ")" for part in candidate_parts]
+        selected_moves = [m for m in move_rows if m.get("destination_worktype") == r["WORKTYPE"]]
+        required = r.get("OPERATORS_NEEDED_CONSERVATIVE", "")
+        remaining = max(0, int(required) - int(r["RESOURCES_AFTER_REALLOCATION"])) if isinstance(required, (int, float)) else ""
+        out.append(dict(worktype=r["WORKTYPE"], name=wt_names.get(r["WORKTYPE"], ""),
+                        operators_before=r["RESOURCES"], etc_before=before, ready_before=r["WT_READY_TIME"],
+                        operator=r["REALLOCATED_IN"], source=(r["REALLOCATION_REASON"] or ""),
+                        eligibility=r["REALLOCATION_REASON"] or "",
+                        familiarity=familiarity,
+                        familiarity_parts=[part.strip() for part in familiarity.split(";") if part.strip()],
+                        operators_after=r["RESOURCES_AFTER_REALLOCATION"], rate_before=r["ACTUALRATELINES"],
+                        rate_after=r["RATE_AFTER_REALLOCATION"], etc_after=after,
+                        ready_after=r["WT_READY_TIME_AFTER"], cutoff=cutoff,
+                        time_saved=(before - after if isinstance(before, float) and isinstance(after, float) else ""),
+                        status_before=r.get("WT_PLANNING_STATUS", r["WT_STATUS"]),
+                        status_after=r.get("WT_PLANNING_STATUS_AFTER", r["WT_STATUS_AFTER"]),
+                        etc_low=r.get("WT_ETC_LOW"), etc_high=r.get("WT_ETC_HIGH"),
+                        etc_after_low=r.get("WT_ETC_AFTER_LOW"), etc_after_high=r.get("WT_ETC_AFTER_HIGH"),
+                        allocated=len(selected_moves), remaining_shortfall=remaining,
+                        uncertainty_evidence=r.get("UNCERTAINTY_EVIDENCE", ""),
+                        eligible_candidates=eligible_candidates,
+                        eligible_candidate_list=candidate_parts,
+                        moves=selected_moves,
+                        no_eligible=r["NO_ELIGIBLE_OPERATOR"] or ""))
     return out
 
 
@@ -270,9 +334,18 @@ def _trends(src, snaps, snapshot_no, ship, truck_hist, lines, tc, t):
 
 
 # ------------------------------------------------------------------ explanation
-def _why(truck, wt_rows, picked, open_mine, orders, wt_names, t):
+def _why(truck, wt_rows, picked, open_mine, orders, wt_names, t, missed_at_departure):
     st, cut, dep = truck["TRUCK_STATUS"], truck["PICK_CUTOFF"], truck["DEPARTURE"]
     name = lambda w: wt_names.get(w, f"WT {w}")
+    if st == "ON TIME" and truck.get("PLANNING_STATUS") == "AT RISK":
+        ranged = [r for r in wt_rows if isinstance(r.get("WT_ETC_HIGH"), float)]
+        controlling = max(ranged, key=lambda r: r["WT_ETC_HIGH"]) if ranged else None
+        if controlling:
+            return (f"The point estimate is on time, but measured operator productivity varies. "
+                    f"{name(controlling['WORKTYPE'])} has an empirical ETC range of "
+                    f"{dur(controlling['WT_ETC_LOW'])} to {dur(controlling['WT_ETC_HIGH'])}, with the slower case "
+                    f"ready at {clock(controlling['WT_READY_LATE'])} versus the {clock(cut)} cutoff. "
+                    "This range uses observed paces and excludes unmeasured travel, congestion, breaks and equipment delays.")
     if st == "DEPARTED COMPLETE":
         if len(picked):
             last = picked.MOVED_TO_C_AT.max()
@@ -282,9 +355,11 @@ def _why(truck, wt_rows, picked, open_mine, orders, wt_names, t):
                     f"{plural(len(picked), 'line')} picked by {plural(picked.RESOURCENAME.nunique(), 'operator')}.")
         return f"Left at {clock(dep)}."
     if st.startswith("DEPARTED - "):
-        by = open_mine.groupby("WORKTYPE").size()
+        by = missed_at_departure.groupby("WORKTYPE").size()
         parts = ", ".join(f"{n} {name(w)}" for w, n in by.items())
-        return f"Left at {clock(dep)} with {truck['OPEN_LINES']} lines not picked ({parts}). They missed this truck."
+        count = len(missed_at_departure)
+        detail = f" ({parts})" if parts else ""
+        return f"Left at {clock(dep)} with {count} lines not picked{detail}. They missed this truck."
     if st == "NO WORK RELEASED YET":
         first = min((o["release"] for o in orders), default=None)
         return f"No work released yet for this truck." + (f" Its first orders are released at {clock(first)}." if first else "")
@@ -298,8 +373,14 @@ def _why(truck, wt_rows, picked, open_mine, orders, wt_names, t):
     late = [r for r in wt_rows if r["OPEN_LINES"] > 0]
     if st == "NO RATE":
         nr = [r for r in late if r["WT_ETC"] is None]
-        return " ".join(f"{name(r['WORKTYPE'])} has {plural(r['OPEN_LINES'], 'open line')} for this truck but nobody is working it, "
-                        f"so its speed and the truck's ETC cannot be estimated." for r in nr) + \
+        def reason(r):
+            if r["RESOURCES"] == 0:
+                return (f"{name(r['WORKTYPE'])} has {plural(r['OPEN_LINES'], 'open line')} for this truck but nobody "
+                        "is logged in there, so its speed and the truck's ETC cannot be estimated.")
+            return (f"{name(r['WORKTYPE'])} has {plural(r['OPEN_LINES'], 'open line')} and "
+                    f"{plural(r['RESOURCES'], 'picker')} logged in, but no positive observed rate yet, so the truck's "
+                    "ETC cannot be estimated.")
+        return " ".join(reason(r) for r in nr) + \
             " Someone needs to start picking there."
     b = int(truck["BOTTLENECK"][3:4]) if truck["BOTTLENECK"] else None
     br = next((r for r in wt_rows if r["WORKTYPE"] == b), None)
@@ -323,27 +404,38 @@ def _why(truck, wt_rows, picked, open_mine, orders, wt_names, t):
         text += f" {other_txt}."
     if isinstance(need, int):
         text += f" To make it, {name(b)} needs {need} pickers ({br['ADDITIONAL_OPERATORS']} more)."
-    if br["TEMPS_ADDED"]:
+    if br["REALLOCATED_IN"]:
         res = "meets" if truck["TRUCK_STATUS_AFTER"] == "ON TIME" else "still misses"
-        text += (f" With {br['TEMPS_ADDED']} temporary operator(s) ({br['TEMP_OPERATORS_ADDED']}) the truck {res} the cutoff "
+        text += (f" After reallocating existing operator(s) {br['REALLOCATED_IN']}, the truck {res} the cutoff "
                  f"({truck['SLACK_AFTER']}).")
+    elif br["NO_ELIGIBLE_OPERATOR"]:
+        text += " " + br["NO_ELIGIBLE_OPERATOR"]
     return text
 
 
 # ------------------------------------------------------------------ alerts and actions
-def _alerts(truck, worktypes, operators, picked, wt_names, open_wts):
+def _alerts(truck, worktypes, operators, picked, wt_names, open_wts, missed_at_departure):
     alerts = []
-    st = truck["TRUCK_STATUS"]
+    st = truck.get("PLANNING_STATUS") or truck["TRUCK_STATUS"]
     for w in worktypes:
-        if w["meets"] == "NO":
-            act = f"Add {w['additional']} picker(s) to {w['name']}" if isinstance(w["additional"], int) else "Add pickers"
-            if w["temps"]:
-                act += f"; {w['temps']} temporary operator(s) available: {w['temp_names']}"
-            alerts.append(("danger", f"{w['name']} finishes at {clock(w['ready'])}, after the pick cutoff.", act))
+        if w["planning_meets"] == "NO":
+            act = (f"Reallocate {w['reallocated_in']} to {w['name']}" if w["reallocated_in"]
+                   else w["no_eligible"] or "Review qualified existing operators")
+            if w["meets"] == "NO":
+                message = f"{w['name']} finishes at {clock(w['ready'])}, after the pick cutoff."
+            else:
+                finish = w["ready_late"] if isinstance(w["ready_late"], float) else w["ready"]
+                message = f"{w['name']} conservative finish is {clock(finish)}, after the pick cutoff."
+            alerts.append(("danger", message, act))
         if w["meets"] == "UNKNOWN - NO RATE":
-            alerts.append(("warning", f"{w['name']} has {w['open_lines']} open lines and nobody working it.",
-                           f"Send a picker to {w['name']}."))
-        if w["ahead_other"] > 0 and w["meets"] == "NO":
+            if w["resources"] == 0:
+                text, action = (f"{w['name']} has {w['open_lines']} open lines and nobody logged in.",
+                                f"Send a picker to {w['name']}.")
+            else:
+                text, action = (f"{w['name']} has {w['open_lines']} open lines but no positive observed rate yet.",
+                                "Check activity and complete initial picks to establish a rate.")
+            alerts.append(("warning", text, action))
+        if w["ahead_other"] > 0 and w["planning_meets"] == "NO":
             alerts.append(("info", f"{w['ahead_other']} {w['name']} lines of earlier trucks are picked first.",
                            "Check whether this truck should be prioritised over an earlier one."))
     for o in operators:
@@ -361,8 +453,11 @@ def _alerts(truck, worktypes, operators, picked, wt_names, open_wts):
         for loc, n in shorts[shorts >= 2].items():
             alerts.append(("warning", f"{n} short picks at location {loc}.", "Check stock / replenish the location."))
     if st in ("AT RISK",) and truck["TRUCK_STATUS_AFTER"] == "AT RISK":
-        alerts.append(("danger", "Still late even with the available temporary operators.",
-                       "Consider delaying departure, shipping partial or moving orders to the next truck (Phase 5)."))
+        reason = next((w.get("no_eligible") for w in worktypes if w.get("no_eligible")), "")
+        if not reason:  # the per-work-type alert already shows a no-eligible explanation
+            alerts.append(("danger", "Still at risk after safe reallocation checks.",
+                           "Review departure or order priorities; do not force an unsafe move."))
     if st.startswith("DEPARTED - "):
-        alerts.append(("danger", f"{truck['OPEN_LINES']} lines missed this truck.", "Move them to the next truck or ship separately."))
+        alerts.append(("danger", f"{len(missed_at_departure)} lines missed this truck.",
+                       "Move them to the next truck or ship separately."))
     return alerts

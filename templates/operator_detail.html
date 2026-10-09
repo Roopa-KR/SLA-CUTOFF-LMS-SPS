@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Operator {{ o.name }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3 page-heading">
+  <button class="btn btn-sm btn-outline-secondary" onclick="history.back()">&larr; Back</button>
+  <h4 class="mb-0">Operator {{ o.name }}</h4>
+  <span class="badge text-bg-{{ {'Working':'success','Assigned, not started':'warning','Idle':'secondary','Logged out':'light'}[o.status] }}">{{ o.status }}</span>
+  <span class="text-muted">Current: WT {{ o.current_worktype }} {{ o.current_worktype_name }}</span>
+  <form method="get" class="ms-auto d-flex align-items-center gap-2">
+    <label for="snapshot" class="small text-muted">Snapshot</label>
+    <select id="snapshot" name="snapshot" class="form-select form-select-sm" onchange="this.form.submit()">
+      {% for s in snaps %}<option value="{{ s.snapshot_no }}" {% if s.snapshot_no == current.snapshot_no %}selected{% endif %}>{{ s.snapshot_no }} &middot; {{ s.snapshot_time | clock }}</option>{% endfor %}
+    </select>
+  </form>
+</div>
+
+<div class="alert alert-warning compact-alert"><strong>Provenance:</strong> picks, pieces, labor time, assignments, and actual rates below come from warehouse records. Entries marked <strong>SIMULATED PLANNING ASSUMPTION</strong> are synthetic cross-training profiles, not verified work or training history.</div>
+
+<div class="row g-2 mb-3">
+  <div class="col-md-3"><div class="card h-100"><div class="card-body py-2"><div class="small text-muted">Completed work</div><div class="fs-4 fw-semibold">{{ o.lines_total }} lines</div><div class="small text-muted">{{ o.pieces_total | num }} pieces</div></div></div></div>
+  <div class="col-md-3"><div class="card h-100"><div class="card-body py-2"><div class="small text-muted">Observed labor time</div><div class="fs-4 fw-semibold">{{ o.working_hours | num(2) }} h</div><div class="small text-muted">Productive-only time unavailable in source data</div></div></div></div>
+  <div class="col-md-3"><div class="card h-100"><div class="card-body py-2"><div class="small text-muted">Actual production rate</div><div class="fs-4 fw-semibold">{% if o.actual_rate is number %}{{ o.actual_rate | num(1) }} l/h{% else %}&mdash;{% endif %}</div><div class="small text-muted">completed lines &divide; observed labor hours</div></div></div></div>
+  <div class="col-md-3"><div class="card h-100"><div class="card-body py-2"><div class="small text-muted">Assigned remaining</div><div class="fs-4 fw-semibold">{{ o.remaining_lines }} lines</div><div class="small text-muted">{{ o.remaining_pieces | num }} pieces &middot; ETC {% if o.etc is number %}{{ o.etc | dur }}{% else %}unavailable{% endif %}</div></div></div></div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-lg-6"><div class="card h-100"><div class="card-header fw-semibold">Work-type familiarity</div>
+    <div class="table-responsive"><table class="table table-sm readable-table data-table familiarity-table mb-0"><thead><tr><th>Work type</th><th>Experience</th><th>Provenance</th><th>Evidence</th></tr></thead><tbody>
+      {% for f in o.familiarity %}<tr><td>{{ f.worktype }} {{ f.name }}</td><td>{{ f.level }}</td><td class="provenance-cell"><span class="badge text-bg-{{ 'success' if f.provenance == 'ACTUAL HISTORICAL' else 'warning' }}">{{ f.provenance }}</span></td><td class="small long-value">{{ f.evidence }}</td></tr>{% else %}<tr><td colspan="4" class="text-muted">No familiarity evidence is available.</td></tr>{% endfor %}
+    </tbody></table></div></div></div>
+  <div class="col-lg-6"><div class="card h-100"><div class="card-header fw-semibold">Current workload and cutoff</div><div class="card-body">
+    <dl class="row mb-0"><dt class="col-sm-5">Current work type</dt><dd class="col-sm-7">WT {{ o.current_worktype }} {{ o.current_worktype_name }}</dd>
+      <dt class="col-sm-5">Status</dt><dd class="col-sm-7">{{ o.status }}</dd><dt class="col-sm-5">Remaining assigned</dt><dd class="col-sm-7">{{ o.remaining_lines }} lines / {{ o.remaining_pieces | num }} pieces</dd>
+      <dt class="col-sm-5">Operator ETC</dt><dd class="col-sm-7">{% if o.etc is number %}{{ o.etc | dur }}{% else %}Unavailable: no measured current-work-type pace{% endif %}</dd>
+      <dt class="col-sm-5">Next work cutoff</dt><dd class="col-sm-7">{{ o.cutoff | sclock if o.cutoff is number else "No open assigned-area work" }}</dd>
+      <dt class="col-sm-5">Area cutoff status</dt><dd class="col-sm-7">{{ o.cutoff_status }}</dd></dl>
+  </div></div></div>
+</div>
+
+<div class="card mb-3"><div class="card-header fw-semibold">Actual productivity by work type</div>
+  <div class="table-responsive"><table class="table table-sm readable-table data-table mb-0"><thead><tr><th>Work type</th><th class="text-end">Completed lines</th><th class="text-end">Pieces</th><th class="text-end">Observed hours</th><th class="text-end">Actual rate</th><th>Equation</th></tr></thead><tbody>
+    {% for m in o.worktype_metrics %}<tr><td>{{ m.worktype }} {{ m.name }}</td><td class="text-end">{{ m.lines }}</td><td class="text-end">{{ m.pieces | num }}</td><td class="text-end">{{ m.hours | num(2) }}</td><td class="text-end">{% if m.pace is number %}{{ m.pace | num(1) }} l/h{% else %}&mdash;{% endif %}</td><td class="small">completed lines &divide; LM005S1 observed hours</td></tr>{% endfor %}
+  </tbody></table></div></div>
+
+<div class="card mb-3"><div class="card-header fw-semibold">Reallocation eligibility</div>
+  <div class="table-responsive"><table class="table table-sm readable-table data-table eligibility-table mb-0"><thead><tr><th>Destination</th><th>Familiarity basis</th><th class="text-end">At-risk trucks</th><th class="text-end">Estimated contribution</th><th>Decision</th><th>Reason</th></tr></thead><tbody>
+    {% for e in o.eligibility %}<tr class="{% if e.state == 'Eligible candidate' %}table-success{% endif %}"><td>{{ e.worktype }} {{ e.name }}</td><td class="provenance-cell"><span class="badge text-bg-{{ 'success' if e.familiarity.provenance == 'ACTUAL HISTORICAL' else 'warning' }}">{{ e.familiarity.provenance }}</span></td><td class="text-end">{{ e.at_risk_trucks }}</td><td class="text-end">{% if e.estimated_pace is number %}{{ e.estimated_pace | num(1) }} l/h{% else %}&mdash;{% endif %}</td><td>{{ e.state }}</td><td class="small long-value">{{ e.reason }}</td></tr>{% else %}<tr><td colspan="6" class="text-muted">No other familiar work type is recorded.</td></tr>{% endfor %}
+  </tbody></table></div><div class="card-footer small text-muted">For simulated familiarity, estimated destination contribution = MIN(actual source pace, actual destination per-person rate). Eligibility also requires active status and proof that the source remains on time after removal.</div></div>
+
+<div class="row g-3 mb-4"><div class="col-lg-6"><div class="card h-100"><div class="card-header fw-semibold">Assignment history available by snapshot</div><ul class="list-group list-group-flush">
+  {% for a in o.assignments %}<li class="list-group-item">Snapshot {{ a.snapshot }} at {{ a.time | sclock }}: WT {{ a.worktype }} {{ a.name }}{% if a.active %} <span class="badge text-bg-success">active</span>{% endif %}</li>{% endfor %}
+</ul></div></div><div class="col-lg-6"><div class="card h-100"><div class="card-header fw-semibold">Selected reallocation at this snapshot</div><ul class="list-group list-group-flush">
+  {% for m in o.selected_moves %}<li class="list-group-item">WT {{ m.source_worktype }} {{ m.source }} &rarr; WT {{ m.destination_worktype }} {{ m.destination }}; {{ m.familiarity_type }}<div class="small text-muted">{{ m.eligibility }} {{ m.destination_pace_basis }}.</div></li>{% else %}<li class="list-group-item text-muted">Not selected for a move at this snapshot.</li>{% endfor %}
+</ul></div></div></div>
+{% endblock %}

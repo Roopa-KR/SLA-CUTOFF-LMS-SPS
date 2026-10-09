@@ -8,13 +8,13 @@
   <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
 </head>
 <body>
-  <nav class="navbar navbar-dark bg-dark mb-3">
-    <div class="container-fluid">
-      <a class="navbar-brand" href="{{ url_for('dashboard') }}">Truck ETC &middot; SMD warehouse 0200</a>
-      <span class="navbar-text small">Real SMD day 08-Sep-2026 &middot; departures synthesized</span>
+  <nav class="navbar navbar-dark bg-dark app-navbar mb-3">
+    <div class="container-fluid gap-2">
+      <a class="navbar-brand" href="{{ url_for('dashboard') }}">Truck ETC &middot; {{ business_client }} warehouse {{ warehouse_id }}</a>
+      <span class="navbar-text small">Workbook analysis day {{ analysis_date }}</span>
     </div>
   </nav>
-  <main class="container-fluid">{% block content %}{% endblock %}</main>
+  <main class="container-fluid app-shell">{% block content %}{% endblock %}</main>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   {% block scripts %}{% endblock %}
 </body>

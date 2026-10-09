@@ -42,9 +42,10 @@ def test_worktype_no_rate_and_cutoff_passed():
     assert _wt_calc(wt_row(open_lines=0))["WT_MEETS"] == ""
 
 
-def _answer(etc_days, t=DAY + 18 * H, dep=DAY + 19.5 * H, open_=10, released=20):
+def _answer(etc_days, t=DAY + 18 * H, dep=DAY + 19.5 * H, open_=10, released=20, missed=None):
     rows = pd.DataFrame([dict(WORKTYPE=1, ADDITIONAL_OPERATORS=3)])
-    return _truck_answer(rows, pd.Series([etc_days], dtype=object), t, dep, dep - 0.5 * H, open_, released, after=False)
+    return _truck_answer(rows, pd.Series([etc_days], dtype=object), t, dep, dep - 0.5 * H, open_, released,
+                         after=False, missed_at_departure=missed)
 
 
 def test_truck_status_rules():
@@ -56,3 +57,8 @@ def test_truck_status_rules():
     assert _answer(0.0, open_=0, released=0)["TRUCK_STATUS"] == "NO WORK RELEASED YET"
     assert _answer(0.5 * H, t=DAY + 19.25 * H)["TRUCK_STATUS"] == "PICK CUTOFF PASSED - LATE"
     assert _answer(0.5 * H, t=DAY + 19.5 * H)["TRUCK_STATUS"] == "DEPARTED - 10 LINES LEFT BEHIND"
+
+
+def test_departed_status_keeps_the_departure_miss_count_after_late_picks():
+    result = _answer(0.0, t=DAY + 20 * H, open_=0, released=20, missed=2)
+    assert result["TRUCK_STATUS"] == "DEPARTED - 2 LINES LEFT BEHIND"

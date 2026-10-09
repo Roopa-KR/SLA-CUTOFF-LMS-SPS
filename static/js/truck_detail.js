@@ -10,17 +10,21 @@
   const wt = d.worktypes.filter(w => w.ready);
   if (wt.length) {
     const traces = [{ type: "bar", orientation: "h", y: wt.map(w => w.name), base: wt.map(() => d.now),
-      x: wt.map(w => (new Date(w.ready) - new Date(d.now))), marker: { color: wt.map(w => colorFor(w.meets)) },
+      x: wt.map(w => (new Date(w.ready) - new Date(d.now))), marker: { color: wt.map(w => colorFor(w.planning_meets)) },
       name: "Ready (now)", hovertext: wt.map(w => w.name + ": ready " + w.ready.slice(11, 16)), hoverinfo: "text" }];
-    const after = wt.filter(w => w.ready_after && w.temps);
+    const ranged = wt.filter(w => w.ready_late);
+    if (ranged.length) traces.push({ type: "scatter", mode: "markers", y: ranged.map(w => w.name),
+      x: ranged.map(w => w.ready_late), marker: { symbol: "line-ns-open", size: 16, color: "#fd7e14", line: { width: 2 } },
+      name: "Slower empirical bound", hovertext: ranged.map(w => w.name + ": slower bound " + w.ready_late.slice(11, 16)), hoverinfo: "text" });
+    const after = wt.filter(w => w.ready_after && w.reallocated);
     if (after.length) traces.push({ type: "scatter", mode: "markers", y: after.map(w => w.name), x: after.map(w => w.ready_after),
-      marker: { symbol: "diamond", size: 11, color: "#0d6efd" }, name: "Ready with temporary operators" });
+      marker: { symbol: "diamond", size: 11, color: "#0d6efd" }, name: "Ready after reallocation" });
     Plotly.newPlot("wt-chart", traces, Object.assign({}, base, { xaxis: { type: "date", tickformat: "%H:%M" },
       shapes: [{ type: "line", x0: d.cutoff, x1: d.cutoff, yref: "paper", y0: 0, y1: 1, line: { color: "#212529", dash: "dash" } }],
       annotations: [{ x: d.cutoff, yref: "paper", y: 1.05, text: "pick cutoff " + d.cutoff.slice(11, 16), showarrow: false, font: { size: 11 } }] }), cfg);
   } else empty("wt-chart", "No open work: nothing to finish.");
 
-  // 2. Operator status donut and pace vs area average
+  /* Operator Status and Pace is intentionally disabled. Keep this block so it can be re-enabled later.
   const st = {}; d.operators.forEach(o => { st[o.status] = (st[o.status] || 0) + 1; });
   if (d.operators.length) {
     Plotly.newPlot("status-chart", [{ type: "pie", hole: 0.55, labels: Object.keys(st), values: Object.values(st), sort: false,
@@ -34,6 +38,7 @@
         marker: { symbol: "line-ew-open", size: 22, color: "#212529", line: { width: 2 } } }],
       Object.assign({}, base, { yaxis: { title: "lines / hour" }, margin: { t: 10, r: 10, b: 80, l: 50 } }), cfg);
   } else { empty("status-chart", "No operators yet."); empty("pace-chart", ""); }
+  */
 
   // 3. Open lines (bars) and slack (line) over the snapshots
   Plotly.newPlot("burn-chart", [

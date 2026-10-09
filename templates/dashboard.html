@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
-<form method="get" class="row g-2 align-items-center mb-3">
+<form method="get" class="row g-2 align-items-center mb-3 compact-toolbar">
   <div class="col-auto"><label for="snapshot" class="col-form-label fw-semibold">Snapshot</label></div>
   <div class="col-auto">
     <select id="snapshot" name="snapshot" class="form-select" onchange="this.form.submit()">
@@ -14,7 +14,7 @@
   <div class="col-auto text-muted small">Every value is calculated as at {{ current.snapshot_time | clock }} (South Carolina time).</div>
 </form>
 
-<div class="row g-3 mb-3">
+<div class="row g-2 mb-3 kpi-grid">
   {% for label, key, style in [("On time", "ON TIME", "success"), ("At risk", "AT RISK", "danger"),
                                ("Pick cutoff passed", "PICK CUTOFF PASSED - LATE", "danger"), ("No rate", "NO RATE", "warning"),
                                ("All picked", "ALL PICKED", "success"), ("Departed", "DEPARTED", "secondary")] %}
@@ -29,7 +29,7 @@
 <div class="card mb-3">
   <div class="card-header fw-semibold">Trucks <span class="fw-normal text-muted small">&middot; click a truck for details</span></div>
   <div class="table-responsive">
-    <table class="table table-sm table-hover align-middle mb-0">
+    <table class="table table-sm table-hover align-middle readable-table data-table dashboard-table mb-0">
       <thead class="table-light"><tr>
         <th>Truck</th><th>Door</th><th>Status</th><th class="text-end">ETC</th><th>Ready time</th><th>Pick cutoff</th>
         <th>Departure</th><th class="text-end">Slack</th><th>Bottleneck</th><th class="text-end">Operator gap</th>
@@ -40,12 +40,12 @@
         <tr class="clickable" onclick="location.href='{{ url_for('truck', shipment_id=t.shipment_id, snapshot=current.snapshot_no) }}'"
             title="Open the truck details">
           <td class="fw-semibold"><a href="{{ url_for('truck', shipment_id=t.shipment_id, snapshot=current.snapshot_no) }}" class="link-dark">{{ t.shipment_id }}</a></td><td>{{ t.dock_door }}</td>
-          <td><span class="badge text-bg-{{ t.status | status_style }}">{{ t.status }}</span></td>
-          <td class="text-end">{% if t.open_lines %}{{ t.etc_hours | hhmm }}{% endif %}</td>
-          <td>{{ t.ready_time | clock }}</td><td>{{ t.pick_cutoff | clock }}</td><td>{{ t.departure | clock }}</td>
-          <td class="text-end {% if t.slack_minutes is not none and t.slack_minutes < 0 %}text-danger fw-semibold{% endif %}">{{ t.slack_text or "" }}</td>
+          <td class="status-cell"><span class="badge text-bg-{{ (t.planning_status or t.status) | status_style }}">{{ t.planning_status or t.status }}</span>{% if t.uncertainty_changes_risk %}<div class="small text-muted">point estimate on time</div>{% endif %}</td>
+          <td class="text-end">{% if t.open_lines %}{{ t.etc_hours | hhmm }}{% if t.etc_low_hours is not none and t.etc_high_hours is not none %}<div class="small text-muted">{{ t.etc_low_hours | hhmm }}–{{ t.etc_high_hours | hhmm }}</div>{% endif %}{% endif %}</td>
+          <td>{{ t.ready_time | clock }}{% if t.ready_time_early and t.ready_time_late %}<div class="small text-muted">{{ t.ready_time_early | clock }}–{{ t.ready_time_late | clock }}</div>{% endif %}</td><td>{{ t.pick_cutoff | clock }}</td><td>{{ t.departure | clock }}</td>
+          <td class="text-end {% if (t.planning_slack_text or t.slack_text or '').startswith('-') %}text-danger fw-semibold{% endif %}">{{ t.planning_slack_text or t.slack_text or "" }}</td>
           <td>{{ t.bottleneck or "" }}</td>
-          <td class="text-end">{{ t.operator_gap or "" }}</td>
+          <td class="text-end">{{ t.planning_operator_gap or t.operator_gap or "" }}</td>
           <td class="text-end">{{ t.open_lines }} / {{ t.lines_released }}</td>
         </tr>
       {% endfor %}
@@ -53,7 +53,7 @@
     </table>
   </div>
   <div class="card-footer small text-muted">
-    ETC = time for the truck's slowest work type to pick its lines (work for earlier trucks first). Ready time = snapshot + ETC.
+    ETC is the point estimate; the smaller line below is the empirical range from measured operator paces. Planning status uses the slower bound.
     Pick cutoff = departure - 30 min. Operator gap = extra pickers the bottleneck work type needs to make the pick cutoff.
   </div>
 </div>

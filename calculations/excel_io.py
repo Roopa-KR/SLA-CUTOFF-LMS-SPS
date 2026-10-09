@@ -46,7 +46,7 @@ class Inputs:
     shipments: pd.DataFrame        # OB_SHIPMENT
     orders: pd.DataFrame           # OB_ORDER
     line_map: pd.DataFrame         # OB_LINE_MAP
-    temps: pd.DataFrame            # TEMP_OPERATORS skills grid
+    operator_experience: pd.DataFrame  # labelled simulated planning familiarity
     worktype_names: dict           # WORKTYPE -> description (M123 / M123T)
 
 
@@ -87,21 +87,23 @@ def load_inputs(path: str) -> Inputs:
     line_map["WHORDERID"] = line_map.WHORDERID.astype(str)
     line_map["CUSTOMER"] = line_map["CUSTOMER (OWNER)"] if "CUSTOMER (OWNER)" in line_map else None
 
-    tws = wb["TEMP_OPERATORS"]
-    temps = pd.DataFrame([[tws.cell(r, c).value for c in range(1, 8)] for r in range(6, 16)],
-                         columns=["RESOURCENAME", 1, 2, 3, 4, 5, 6])
+    if "OPERATOR_EXPERIENCE" in wb.sheetnames:
+        operator_experience = _table(wb["OPERATOR_EXPERIENCE"], 5)
+    else:
+        operator_experience = pd.DataFrame(columns=["RESOURCENAME", "WORKTYPE", "EXPERIENCE_LEVEL",
+                                                    "EVIDENCE_TYPE", "ASSUMPTION_NOTES"])
 
     ids = {r[0]: r[5] for r in wb["M123"].iter_rows(min_row=3, values_only=True) if r[0]}
     desc = {r[1]: r[3] for r in wb["M123T"].iter_rows(min_row=3, values_only=True) if r[1]}
     worktype_names = {wt: desc.get(mid) for mid, wt in ids.items()}
     wb.close()
-    return Inputs(snapshots, config, lm, ti, tc, shipments, orders, line_map, temps, worktype_names)
+    return Inputs(snapshots, config, lm, ti, tc, shipments, orders, line_map, operator_experience, worktype_names)
 
 
 def load_reference(path: str) -> dict:
-    """Cached Excel results of ETC_CALC, TRUCK_WT_ETC, TRUCK_ETC and TRUCK_TEMP_NEED (for parity tests)."""
+    """Cached Excel results of the baseline ETC and operator-reallocation analysis."""
     wb = load_workbook(path, read_only=True, data_only=True)
     out = {name: _table(wb[name], 5).map(to_serial)
-           for name in ["ETC_CALC", "TRUCK_WT_ETC", "TRUCK_ETC", "TRUCK_TEMP_NEED"]}
+           for name in ["ETC_CALC", "TRUCK_WT_ETC", "TRUCK_ETC", "TRUCK_REALLOCATION"]}
     wb.close()
     return out

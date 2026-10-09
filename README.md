@@ -7,11 +7,12 @@ The Excel workbook (`data/workbook.xlsx` = SMD_Truck_ETC_RealDay_2026-09-08.xlsx
 the Python engine reproduces every value of its truck sheets (see "Parity").
 
 **Data: a cleaned subset of the real SMD day 08-Sep-2026** (extract SMD-235, warehouse 100): 1,163 items, 625 work
-IDs, 421 customer orders, 33 routes = 33 trucks, and 13 pickers with their real login sessions and pick times. Routes
+IDs, 421 customer orders, 33 routes = 33 trucks, and 12 pickers with their real login sessions and pick times. Routes
 1001, 1075, and 1085 and all their linked records were removed because their picks occurred after the synthesized
 cutoffs/departures. Only the truck departures
-(last item release + 60 min, rounded up to 15 min = pick cutoff, + 30 min loading) and dock doors are synthesized.
-Operators, familiarity evidence and productivity are never invented. Speeds are real items per observed picker-hour.
+(last item release + 60 min, rounded up to 15 min = pick cutoff, + 30 min loading) and dock doors are synthesized,
+except the explicitly labelled `T07_PICK_CUTOFF_PASSED_LATE` status-coverage scenario. Operator identities and
+productivity are actual; cross-training familiarity includes separately labelled simulated planning assumptions.
 
 SMD structure used: route = truck; a customer order is split into one work ID per region (work ID = order number +
 2 digits); a region-6 case-pick work ID can hold items of several customers, and every item keeps its own order and
@@ -46,6 +47,7 @@ calculations/
   excel_io.py           reads inputs and the cached Excel results (openpyxl -> pandas)
   etc.py                the ETC equation per snapshot x work type (ETC_CALC)
   truck.py              truck ETC per work type and per truck (TRUCK_WT_ETC, TRUCK_ETC)
+  uncertainty.py        empirical observed-pace ranges and conservative planning status
   reallocation.py       qualified existing-operator moves, source-safety checks and after-move ETC
   detail.py             truck drill-down: operators, work types, orders, trends, explanation, alerts
   engine.py             runs the whole calculation
@@ -90,7 +92,11 @@ the calculation code.
    no rate); READY_TIME = T + TRUCK_ETC; SLACK = PICK_CUTOFF - READY_TIME; status (first rule that applies):
    DEPARTED (complete / n lines left behind), NO WORK RELEASED YET, ALL PICKED, PICK CUTOFF PASSED - LATE,
    NO RATE, ON TIME, AT RISK.
-5. Existing-operator reallocation, only for an at-risk work type:
+5. Uncertainty: for every work type and snapshot, positive operator paces observed by that time form an empirical
+   sensitivity envelope. `RATE_LOW/HIGH` encloses both the current team rate and `resources x observed min/max pace`;
+   `WT_ETC_LOW/HIGH = LINES_AHEAD / RATE_HIGH/LOW`. Planning status uses the slower bound. This is not a statistical
+   confidence interval and does not include unmeasured travel, congestion, breaks, equipment or replenishment delays.
+6. Existing-operator reallocation, for point-estimate or uncertainty-driven at-risk work:
    * familiarity comes from either completed TI102C destination lines (actual historical) or the separate
      `OPERATOR_EXPERIENCE` sheet (explicitly labelled **SIMULATED PLANNING ASSUMPTION**);
    * operator pace = that operator's completed lines in the work type / their LM005S1 hours in it by T;
@@ -98,15 +104,19 @@ the calculation code.
      estimate `MIN(actual source pace, actual destination per-person rate)`;
    * destination rate after = team rate before + destination contribution;
    * source rate after = team rate before - operator's observed source pace;
-   * source ETC is recalculated for every open source truck, and the move is rejected unless every source cutoff
-     remains safe;
-   * destination ETC after = LINES_AHEAD / destination rate after. Total headcount is unchanged.
+   * source ETC is recalculated for every open source truck at both point and conservative rates, and the move is
+     rejected unless every source cutoff remains safe;
+   * after every accepted move, source/destination resources, rates, ETC, slack and status are recalculated before
+     evaluating another candidate;
+   * selection continues until the conservative cutoff is met or no safe familiar operator remains. Allocated count,
+     remaining staffing shortfall and the stop reason are retained. Total headcount is unchanged.
 
 The cleaned real day contains no operator with observed completions in more than one work type, so the application
 does not misrepresent cross-training as verified history. A separate deterministic simulated familiarity matrix adds
-planning qualifications to the 12 existing operators without creating labor, picks, hours, or headcount. At snapshot 6,
-amack, esica and psam are safely reallocated from Prescription to OTC; at snapshot 10, hgroff is safely reallocated
-from Cases to OTC. All four moves leave the limiting source truck on time.
+planning qualifications to the 12 existing operators without creating labor, picks, hours, or headcount. Under the
+empirical conservative source-safety rule, three moves remain acceptable in the active replay (snapshots 9-11).
+Snapshot 6's six-picker OTC gap remains unresolved because no qualified source operator can be proven safe at the
+slower observed productivity bound; the UI shows zero allocated, six remaining and the rejection reason.
 
 **Edge cases handled:** no pickers on a work type (NULL rate), cutoff already passed, departed trucks (lines left
 behind), departure changed during the day, order moved to another truck, no work released yet, cancelled lines,
